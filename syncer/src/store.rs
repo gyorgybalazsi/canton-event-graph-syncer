@@ -409,9 +409,9 @@ pub fn batch_query(
     }
 
     // Edges. A repeated update hits the same edge id and is ignored.
-    // `target`/`consumes` point at contracts that may be outside the indexed
+    // `target`/`consumes` point at contracts that may be outside the synced
     // data (e.g. filtered out), so those edges are only written when the
-    // contract exists, as the Neo4j MATCH did.
+    // contract exists.
     let edges: [(&str, &[Edge], bool); 5] = [
         (ACTION, &batch.action, false),
         (CONSEQUENCE, &batch.consequence, false),

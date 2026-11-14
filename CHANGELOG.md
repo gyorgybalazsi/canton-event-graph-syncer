@@ -6,10 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Removed
-- `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
-  history. Its checked-in output for the example DARs now lives in
-  `test/generated/`, and `client` no longer depends on it (it never used it).
+### Added
+- `syncer-ui`: an optional desktop window (iced) that starts and stops the
+  `syncer` program and shows its log (`just sync-ui`). It is not in
+  `default-members`, so a plain `cargo build` skips it.
 
 ### Changed
 - Repository renamed `rust-canton-toolbox` → `canton-event-graph-syncer`
@@ -34,13 +34,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   datetimes. See `syncer/README.md`.
 - Config: the `[neo4j]` section is replaced by `[surrealdb]`
   (`url`, `namespace`, `database`, `username`, `password`), each overridable
-  with a `SURREAL_*` environment variable. The indexer signs in as a database
+  with a `SURREAL_*` environment variable. The syncer signs in as a database
   user, never as root.
 - Database writes retry with a growing delay (1 s up to 30 s) while the server
   is down, keeping the batch in memory instead of failing.
 - `print-cypher` is now `print-surql`.
+- The syncer stops with an explanation, instead of retrying forever, when its
+  start offset is past the ledger end (for example after a sandbox restart).
+- `syncer` also finds `syncer/config/config.toml` when started from the
+  repository root (e.g. `target/release/syncer`).
+
+### Fixed
+- `sandbox-init` keeps reading the sandbox's output, so the sandbox no longer
+  dies of a broken pipe after start-up, and it exits when the sandbox does.
+- `client get-update-by-id` (`just get-update`) now fills in `${VAR}`
+  placeholders in the Keycloak settings, like the syncer; it used to send the
+  placeholder text as the secret.
+- In `syncer-ui`, *Reload* now picks up edits to `.env` when the window was
+  opened with `just sync-ui` (which had already loaded the old values).
 
 ### Removed
+- `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
+  history. Its checked-in output for the example DARs now lives in
+  `test/generated/`, and `client` no longer depends on it (it never used it).
 - `event-graph-ui` (the Dioxus graph visualization).
 - The `[storage]` config section (`flatten_arguments`, `flatten_max_depth`,
   `store_arguments_json`): arguments are always stored nested.

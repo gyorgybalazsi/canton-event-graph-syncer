@@ -124,10 +124,11 @@ cargo build --release -p syncer
 
 ## Configuration
 
-Create `config/config.toml` from the example:
+Create `config/config.toml` (in this folder) from the example. From the
+repository root:
 
 ```bash
-cp config/config.toml.example config/config.toml
+cp syncer/config/config.toml.example syncer/config/config.toml
 ```
 
 The `[surrealdb]` section holds the connection settings. Each one can be set (or
@@ -168,7 +169,7 @@ cargo run --release -p syncer -- sync --use-keycloak --from-days-ago 7
 ```
 
 Options:
-- `--config-file <path>`: Path to config.toml (default: `./config/config.toml`)
+- `--config-file <path>`: Path to config.toml (default: `./config/config.toml`, then `./syncer/config/config.toml`)
 - `--profile <name>`: Profile to use (overrides `active_profile`)
 - `--use-keycloak`: Use Keycloak for JWT token management
 - `--access-token <token>`: Provide a static JWT token
