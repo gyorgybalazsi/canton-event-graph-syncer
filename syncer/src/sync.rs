@@ -164,6 +164,24 @@ fn resume_offset_after_fresh(initial: i64, db_max: Option<i64>) -> i64 {
     }
 }
 
+/// Fails when the stream would begin past the ledger end.
+///
+/// The ledger never reports updates beyond its end, so this cannot fix itself
+/// by retrying. It happens when SurrealDB holds data from a different ledger,
+/// typically a restarted (in-memory) sandbox whose offsets started over.
+fn check_begin_within_ledger(begin_offset: i64, ledger_end: i64) -> Result<()> {
+    if begin_offset > ledger_end {
+        anyhow::bail!(
+            "Cannot resume: the stored offset {begin_offset} is after the ledger end \
+             {ledger_end}. SurrealDB holds data from a different ledger, most likely \
+             because the ledger was reset (e.g. a restarted sandbox). Run a fresh start \
+             (`syncer sync --fresh`, or \"Fresh start\" in the window) to clear it and \
+             sync the current ledger."
+        );
+    }
+    Ok(())
+}
+
 /// Narrows binary-search bounds when resolving a start offset by record time.
 ///
 /// `probed` is the record time (whole seconds) of the first update at or after
@@ -755,6 +773,13 @@ pub async fn run_resilient_sync(
             acs_floor(Some(begin_offset), marker_offset).unwrap_or(begin_offset)
         };
 
+        // Retrying cannot help when the stream would start past the ledger end
+        // (e.g. the ledger was reset), so stop with an explanation. If the
+        // ledger end can't be read, let the stream call below report and retry.
+        if let Ok(ledger_end) = get_ledger_end(&sync_config.ledger_url, Some(&token)).await {
+            check_begin_within_ledger(begin_offset, ledger_end)?;
+        }
+
         info!(
             "Starting stream from offset {}, template_filters={:?}",
             begin_offset, sync_config.template_filters
@@ -875,6 +900,21 @@ pub async fn run_resilient_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn begin_at_or_before_ledger_end_is_ok() {
+        assert!(check_begin_within_ledger(0, 0).is_ok());
+        assert!(check_begin_within_ledger(7, 15).is_ok());
+        assert!(check_begin_within_ledger(15, 15).is_ok());
+    }
+
+    #[test]
+    fn begin_after_ledger_end_is_an_error() {
+        let err = check_begin_within_ledger(22, 7).unwrap_err().to_string();
+        assert!(err.contains("22"), "{err}");
+        assert!(err.contains("ledger end 7"), "{err}");
+        assert!(err.contains("--fresh"), "{err}");
+    }
 
     #[test]
     fn resume_uses_initial_when_db_empty() {

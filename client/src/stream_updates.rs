@@ -126,13 +126,20 @@ pub async fn stream_updates(
             resp
         }
         Err(e) => {
+            // Log only the gRPC code and message: the full `Status` also
+            // carries the encoded error details as a long byte dump.
             error!(
-                "Failed to get updates from ledger at {}:{}: {:?}",
+                "Failed to get updates from ledger at {}:{}: {:?}: {}",
                 file!(),
                 line!(),
-                e
+                e.code(),
+                e.message()
             );
-            return Err(anyhow::anyhow!("Failed to get updates from ledger: {}", e));
+            return Err(anyhow::anyhow!(
+                "Failed to get updates from ledger: {:?}: {}",
+                e.code(),
+                e.message()
+            ));
         }
     };
 
