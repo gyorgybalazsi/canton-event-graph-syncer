@@ -833,8 +833,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "daml-type-rep",
- "derive-lapi-access",
  "futures",
  "futures-util",
  "ledger-api",

@@ -5,8 +5,6 @@ edition = "2024"
 
 [dependencies]
 ledger-api = { path = "../ledger-api" }
-daml-type-rep = { path = "../daml-type-rep" }
-derive-lapi-access = { path = "../derive-lapi-access" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 clap = { workspace = true }
