@@ -6,7 +6,8 @@ use nix::unistd::Pid;
 use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Duration;
 use tracing::info;
 
 #[derive(Parser, Debug)]
@@ -28,6 +29,22 @@ struct Cli {
 
 struct SandboxGuard {
     child: Option<Child>,
+}
+
+impl SandboxGuard {
+    /// Waits until the sandbox process exits and returns its status.
+    async fn exited(&mut self) -> Result<ExitStatus> {
+        let child = self
+            .child
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Sandbox is not running"))?;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
 }
 
 impl Drop for SandboxGuard {
@@ -77,13 +94,22 @@ fn wait_for_sandbox_ready(child: &mut Child) -> Result<()> {
         .take()
         .expect("Failed to capture sandbox stdout");
     info!("Waiting for sandbox to be ready...");
-    let reader = BufReader::new(stdout);
+    let mut lines = BufReader::new(stdout).lines();
 
-    for line in reader.lines().take(120) {
+    for _ in 0..120 {
+        let Some(line) = lines.next() else { break };
         let line = line?;
         info!("Sandbox: {}", line);
         if line.contains("Canton sandbox is ready") {
             info!("Sandbox is ready!");
+            // Keep reading the sandbox's stdout for as long as it runs. If the
+            // read end of the pipe were dropped here, the sandbox's next write
+            // would fail with SIGPIPE and the sandbox would die silently.
+            std::thread::spawn(move || {
+                for line in lines.map_while(std::result::Result::ok) {
+                    info!("Sandbox: {}", line);
+                }
+            });
             return Ok(());
         }
     }
@@ -149,15 +175,22 @@ async fn main() -> Result<()> {
     info!("  Init DAR: {:?}", cli.init_dar);
     info!("  Init script: {}", cli.init_script_name);
 
-    let _guard = start_sandbox(&cli.dar)?;
+    let mut guard = start_sandbox(&cli.dar)?;
 
     run_init_script(&cli.init_dar, &cli.init_script_name)?;
 
     info!("Sandbox initialized successfully. Press Ctrl+C to stop.");
 
-    // Keep running until interrupted
-    tokio::signal::ctrl_c().await?;
-    info!("Shutting down...");
-
-    Ok(())
+    // Keep running until interrupted, or stop if the sandbox goes away.
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            info!("Shutting down...");
+            Ok(())
+        }
+        status = guard.exited() => {
+            let status = status?;
+            Err(anyhow::anyhow!("Sandbox exited unexpectedly ({status})"))
+        }
+    }
 }
