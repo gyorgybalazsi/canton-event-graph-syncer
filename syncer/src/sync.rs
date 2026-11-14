@@ -344,8 +344,9 @@ pub async fn run_resilient_sync(
     from_days_ago: Option<u32>,
 ) -> Result<()> {
     // One shared connection for the whole run. Defines the schema on connect
-    // and waits (with backoff) while the server is unreachable.
-    let store = Store::connect_with_retry(&sync_config.db).await;
+    // and waits (with backoff) while the server is unreachable, but stops if
+    // it refuses the login.
+    let store = Store::connect_with_retry(&sync_config.db).await?;
 
     // If fresh start, clear the synced data first
     if fresh {

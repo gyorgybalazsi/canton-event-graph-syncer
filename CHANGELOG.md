@@ -43,6 +43,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   start offset is past the ledger end (for example after a sandbox restart).
 - `syncer` also finds `syncer/config/config.toml` when started from the
   repository root (e.g. `target/release/syncer`).
+- The syncer stops with an error when SurrealDB refuses its login (wrong
+  password, missing user, namespace or database) instead of retrying forever.
+- `ledger-api` generates its bindings into Cargo's `OUT_DIR`; the generated
+  `ledger-api/src/pb/*.rs` files are no longer checked in.
 
 ### Fixed
 - `sandbox-init` keeps reading the sandbox's output, so the sandbox no longer
@@ -61,6 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The `[storage]` config section (`flatten_arguments`, `flatten_max_depth`,
   `store_arguments_json`): arguments are always stored nested.
 - The `neo4rs` dependency.
+- `jwt_generator.nu` (use `cargo run -p client -- fake-access-token`) and
+  `_daml/daml-ticketoffer-explicit-disclosure/start.sh` (use
+  `just sandbox-init-ticketoffer-explicit-disclosure`).
 
 ## [0.1.0] - 2026-07-01
 

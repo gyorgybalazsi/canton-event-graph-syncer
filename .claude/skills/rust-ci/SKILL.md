@@ -32,7 +32,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ## How to interpret / fix
 - **fmt fails** -> run `cargo fmt --all` to fix, then re-run the gate.
 - **clippy fails** -> fix the lint at the source. Use `cargo clippy --fix` for
-  machine-applicable suggestions; for generated code (`ledger-api/src/pb/*`) or
+  machine-applicable suggestions; for generated code (the `ledger-api` bindings, generated into `OUT_DIR`) or
   intentional patterns, prefer a scoped `#[allow(...)]` with a comment over
   editing — see existing examples in `ledger-api/src/lib.rs` and `test/src/lib.rs`.
 - **build/test fails** -> a real compile error; fix it.

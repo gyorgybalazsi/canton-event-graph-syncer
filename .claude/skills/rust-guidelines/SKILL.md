@@ -18,7 +18,7 @@ ID (e.g. `M-DI-HIERARCHY`) when flagging something so it's traceable.
 > Scope note for this repo: the **Universal**, **Safety**, **Performance**, and
 > **Documentation** sections apply broadly. **Libraries** items apply to the
 > reusable crates (`ledger-api`, `client`, `daml-type-rep`,
-> `submit`). **FFI** is largely N/A. Generated code (`ledger-api/src/pb`) is
+> `submit`). **FFI** is largely N/A. Generated code (the `ledger-api` bindings) is
 > exempt — don't retrofit guidelines onto it.
 
 ## Universal
