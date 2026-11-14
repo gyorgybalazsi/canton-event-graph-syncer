@@ -51,6 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - `sandbox-init` keeps reading the sandbox's output, so the sandbox no longer
   dies of a broken pipe after start-up, and it exits when the sandbox does.
+  It also stops the sandbox on SIGTERM (e.g. `kill`), not only on Ctrl+C.
 - `client get-update-by-id` (`just get-update`) now fills in `${VAR}`
   placeholders in the Keycloak settings, like the syncer; it used to send the
   placeholder text as the secret.

@@ -181,11 +181,18 @@ async fn main() -> Result<()> {
 
     info!("Sandbox initialized successfully. Press Ctrl+C to stop.");
 
-    // Keep running until interrupted, or stop if the sandbox goes away.
+    // Keep running until interrupted (Ctrl+C or SIGTERM, e.g. `kill`), or stop
+    // if the sandbox goes away. Returning drops the guard, which stops the
+    // sandbox; without the SIGTERM handler a plain `kill` left it running.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         result = tokio::signal::ctrl_c() => {
             result?;
             info!("Shutting down...");
+            Ok(())
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, shutting down...");
             Ok(())
         }
         status = guard.exited() => {

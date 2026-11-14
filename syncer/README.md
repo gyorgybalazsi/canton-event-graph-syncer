@@ -11,7 +11,7 @@ never opens a database folder directly.
 
 ## Supported Daml SDK
 
-The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer was last tested end to end against SDK 3.4.8.
+The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer was last tested end to end against SDK 3.7.1 (a local sandbox and SurrealDB 4.0).
 
 ## Features
 
