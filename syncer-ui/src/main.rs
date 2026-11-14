@@ -97,6 +97,9 @@ struct App {
     last_progress: Option<String>,
     /// The latest error line, shown next to a failed run.
     last_error: Option<String>,
+    /// The run reported that its stored offset is past the ledger end: the
+    /// database holds data from an earlier ledger (e.g. a restarted sandbox).
+    ledger_reset: bool,
     closing: bool,
 }
 
@@ -142,6 +145,7 @@ impl App {
             only_problems: false,
             last_progress: None,
             last_error: None,
+            ledger_reset: false,
             closing: false,
         };
         app.reload_config();
@@ -258,10 +262,14 @@ impl App {
         self.run = Run::Starting;
         self.last_progress = None;
         self.last_error = None;
+        self.ledger_reset = false;
         Task::stream(runner::run(launch)).map(Message::Runner)
     }
 
     fn push_line(&mut self, text: String) {
+        if is_ledger_reset(&text) {
+            self.ledger_reset = true;
+        }
         let level = if text.contains(" ERROR ")
             || text.starts_with("Error:")
             || text.contains("panicked at")
@@ -367,6 +375,12 @@ impl App {
                             // start continues unless a fresh start is chosen again.
                             self.mode = Mode::Resume;
                             self.push_line("(next start will resume; choose a fresh start again if you need one)".into());
+                        }
+                        if self.ledger_reset {
+                            // Resuming cannot work against a reset ledger. Offer the
+                            // fresh start; it still asks for confirmation.
+                            self.mode = Mode::Fresh;
+                            self.push_line("(the ledger was reset since the last sync; Fresh start is selected so the next start clears the old data)".into());
                         }
                         self.run = Run::Finished { ok, summary };
                         if self.closing {
@@ -590,6 +604,13 @@ impl App {
             Run::Stopping { since } => text(format!("Stopping… ({})", elapsed(*since)))
                 .style(text::warning)
                 .into(),
+            Run::Finished { .. } if self.ledger_reset => text(
+                "The ledger was reset since the last sync (its end is before the stored offset), \
+                 so resuming cannot work. Fresh start is selected: press \"Start fresh…\" to clear \
+                 the old data and sync the current ledger.",
+            )
+            .style(text::warning)
+            .into(),
             Run::Finished { ok: true, summary } => {
                 text(format!("Not running (last run {summary})")).into()
             }
@@ -721,5 +742,39 @@ fn elapsed(since: Instant) -> String {
         (0, 0, s) => format!("{s}s"),
         (0, m, s) => format!("{m}m {s:02}s"),
         (h, m, _) => format!("{h}h {m:02}m"),
+    }
+}
+
+/// Whether a syncer log line says the stored offset is past the ledger end.
+/// Matches the syncer's own message and the raw Ledger API error code (from
+/// syncer versions that keep retrying instead of stopping).
+fn is_ledger_reset(line: &str) -> bool {
+    line.contains("OFFSET_AFTER_LEDGER_END") || line.contains("is after the ledger end")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_ledger_reset;
+
+    #[test]
+    fn detects_syncer_message() {
+        assert!(is_ledger_reset(
+            "Error: Cannot resume: the stored offset 22 is after the ledger end 7. ..."
+        ));
+    }
+
+    #[test]
+    fn detects_ledger_api_error_code() {
+        assert!(is_ledger_reset(
+            "ERROR syncer::sync: Failed to connect to ledger (attempt 1): \
+             OutOfRange: OFFSET_AFTER_LEDGER_END(12,1af03d78): Begin offset (22) is after ledger end (7)"
+        ));
+    }
+
+    #[test]
+    fn ignores_other_errors() {
+        assert!(!is_ledger_reset(
+            "Error: transport error: Connection refused (os error 61)"
+        ));
     }
 }
