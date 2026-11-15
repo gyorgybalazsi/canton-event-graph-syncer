@@ -9,6 +9,7 @@ use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
 use crate::model::WriteBatch;
+use crate::packages::PackageResolver;
 use crate::store::{AcsMarker, Store};
 
 /// What the sync loop should do about the ACS load, derived from the marker.
@@ -101,6 +102,7 @@ pub struct StreamOutcome {
 
 async fn flush(
     store: &Store,
+    packages: Option<&mut PackageResolver>,
     pending: &mut WriteBatch,
     updates: &mut usize,
     reason: &str,
@@ -108,7 +110,10 @@ async fn flush(
     if *updates == 0 && pending.is_empty() {
         return Ok(());
     }
-    let batch = std::mem::take(pending);
+    let mut batch = std::mem::take(pending);
+    if let Some(packages) = packages {
+        packages.add_package_rows(&mut batch).await;
+    }
     let rows = batch.row_count();
     let start = Instant::now();
     store.write_batch(&batch).await?;
@@ -123,11 +128,13 @@ async fn flush(
 
 /// Writes the batches from `stream` to SurrealDB, grouping up to
 /// `batch_size` updates per transaction. Returns when the stream ends, goes
-/// idle, or the rotation deadline passes.
+/// idle, or the rotation deadline passes. With `packages`, each batch also
+/// gets the name and version of the packages it references.
 pub async fn apply_batch_stream<S>(
     store: &Store,
     mut stream: S,
     settings: StreamSettings,
+    mut packages: Option<&mut PackageResolver>,
 ) -> Result<StreamOutcome>
 where
     S: Stream<Item = WriteBatch> + Unpin,
@@ -149,7 +156,14 @@ where
         if let Some(deadline) = settings.rotation_deadline
             && Instant::now() >= deadline
         {
-            flush(store, &mut pending, &mut updates_in_batch, "rotation").await?;
+            flush(
+                store,
+                packages.as_deref_mut(),
+                &mut pending,
+                &mut updates_in_batch,
+                "rotation",
+            )
+            .await?;
             exit = StreamExit::Rotated;
             break;
         }
@@ -171,7 +185,14 @@ where
                 updates_in_batch += 1;
                 batch_start.get_or_insert_with(Instant::now);
                 if updates_in_batch >= settings.batch_size {
-                    flush(store, &mut pending, &mut updates_in_batch, "full").await?;
+                    flush(
+                        store,
+                        packages.as_deref_mut(),
+                        &mut pending,
+                        &mut updates_in_batch,
+                        "full",
+                    )
+                    .await?;
                     batch_start = None;
                 }
             }
@@ -182,16 +203,37 @@ where
                         "No updates received for {}s, stream appears stale. Triggering reconnect.",
                         last_update.elapsed().as_secs()
                     );
-                    flush(store, &mut pending, &mut updates_in_batch, "idle").await?;
+                    flush(
+                        store,
+                        packages.as_deref_mut(),
+                        &mut pending,
+                        &mut updates_in_batch,
+                        "idle",
+                    )
+                    .await?;
                     break;
                 }
-                flush(store, &mut pending, &mut updates_in_batch, "timeout").await?;
+                flush(
+                    store,
+                    packages.as_deref_mut(),
+                    &mut pending,
+                    &mut updates_in_batch,
+                    "timeout",
+                )
+                .await?;
                 batch_start = None;
             }
         }
     }
 
-    flush(store, &mut pending, &mut updates_in_batch, "final").await?;
+    flush(
+        store,
+        packages,
+        &mut pending,
+        &mut updates_in_batch,
+        "final",
+    )
+    .await?;
 
     let after_offset = store.last_processed_offset().await?;
     let elapsed = start_time.elapsed();
