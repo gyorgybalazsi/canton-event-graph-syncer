@@ -616,3 +616,30 @@ async fn reset_and_clear() {
     }
     assert_eq!(store.last_processed_offset().await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn offsets_are_indexed_for_readers() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+    let store = server.store().await;
+    write_fixture(&store).await;
+
+    // Readers load the newest transactions and the events in an offset range;
+    // with these indexes they don't scan the whole table.
+    for (table, index) in [
+        ("transaction", "transaction_offset"),
+        ("exercised", "exercised_offset"),
+    ] {
+        let info = query_value(&store, &format!("INFO FOR TABLE {table};")).await;
+        let Value::Object(info) = info else {
+            panic!("unexpected info {info:?}")
+        };
+        let Some(Value::Object(indexes)) = info.get("indexes") else {
+            panic!("no indexes in {info:?}")
+        };
+        assert!(
+            indexes.contains_key(index),
+            "{table} has no {index}: {indexes:?}"
+        );
+    }
+}

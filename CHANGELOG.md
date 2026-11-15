@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `syncer` indexes `transaction.offset` and `exercised.offset`. Readers that load the
+  newest transactions or an offset range, such as surrealdb-explorer, no longer
+  scan the whole table.
+
 ### Removed
 - `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
   history. Its checked-in output for the example DARs now lives in

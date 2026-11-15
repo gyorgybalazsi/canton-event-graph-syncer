@@ -35,6 +35,12 @@ pub async fn connect(c: &DbConfig) -> surrealdb::Result<Surreal<Any>> {
 
 /// Tables, relation tables and indexes. Run once at startup (and again after
 /// a reconnect, in case the server lost them); every statement is idempotent.
+///
+/// The `offset` indexes serve readers such as surrealdb-explorer, which load
+/// the newest transactions (`ORDER BY offset DESC LIMIT n`) and the events in
+/// an offset range. (Not built `CONCURRENTLY`: a background build makes
+/// writes in the same tables fail with transaction conflicts. On an existing
+/// ledger the first start after adding them takes a moment longer.)
 pub const SCHEMA: &str = "
 DEFINE TABLE IF NOT EXISTS transaction TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS created TYPE NORMAL SCHEMALESS;
@@ -57,6 +63,8 @@ DEFINE INDEX IF NOT EXISTS created_from_acs ON created FIELDS from_acs;
 DEFINE INDEX IF NOT EXISTS exercised_choice_name ON exercised FIELDS choice_name;
 DEFINE INDEX IF NOT EXISTS exercised_target_contract ON exercised FIELDS target_contract_id;
 DEFINE INDEX IF NOT EXISTS transaction_update_id ON transaction FIELDS update_id;
+DEFINE INDEX IF NOT EXISTS transaction_offset ON transaction FIELDS offset;
+DEFINE INDEX IF NOT EXISTS exercised_offset ON exercised FIELDS offset;
 ";
 
 /// Retry delays for connection and write errors; the last one repeats.
