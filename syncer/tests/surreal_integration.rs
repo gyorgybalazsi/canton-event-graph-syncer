@@ -9,6 +9,7 @@ use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use client::packages::PackageInfo;
 use ledger_api::v2::{
     CreatedEvent, Event, ExercisedEvent, GetUpdatesResponse, Identifier, OffsetCheckpoint, Record,
     RecordField, Transaction, Value as DamlValue, event, get_updates_response::Update, value::Sum,
@@ -466,6 +467,44 @@ async fn messages_produce_records_nested_fields_and_relations() {
 }
 
 #[tokio::test]
+async fn package_rows_resolve_through_the_template_link() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+    let store = server.store().await;
+
+    let mut created = acs_contract();
+    created.template_id = Some(Identifier {
+        package_id: "pkg-abc".into(),
+        module_name: "Main".into(),
+        entity_name: "Asset".into(),
+    });
+    created.package_name = "my-assets".into();
+    let mut batch = model::acs_created_to_batch(&created);
+    assert!(batch.package_refs.contains("pkg-abc"));
+    batch.packages.push(model::package_row(&PackageInfo {
+        package_id: "pkg-abc".into(),
+        package_name: "my-assets".into(),
+        package_version: "1.2.0".into(),
+    }));
+    store.write_acs_batch(&batch, 5, None, true).await.unwrap();
+
+    assert_eq!(count(&store, "package").await, 1);
+    let name = query_value(
+        &store,
+        "SELECT VALUE template.package_name FROM created:`cid-old`;",
+    )
+    .await;
+    assert_eq!(first_string(&name).as_deref(), Some("my-assets"));
+    let version = query_value(
+        &store,
+        "SELECT VALUE template.package.package_version FROM created \
+         WHERE template.package_name = 'my-assets';",
+    )
+    .await;
+    assert_eq!(first_string(&version).as_deref(), Some("1.2.0"));
+}
+
+#[tokio::test]
 async fn target_to_unknown_contract_is_skipped() {
     let bin = require_surreal!();
     let server = TestServer::start(&bin).await;
@@ -526,6 +565,7 @@ async fn batch_write_through_the_stream_writer() {
             idle_timeout: Duration::from_secs(60),
             rotation_deadline: None,
         },
+        None,
     )
     .await
     .unwrap();

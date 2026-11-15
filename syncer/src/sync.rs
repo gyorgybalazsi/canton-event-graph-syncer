@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::{DbConfig, TemplateFilterConfig};
 use crate::model;
+use crate::packages::PackageResolver;
 use crate::store::Store;
 use crate::writer::{
     AcsLoadState, StreamExit, StreamSettings, acs_floor, apply_batch_stream, decide_acs_load,
@@ -88,6 +89,7 @@ async fn load_acs(
     acs_offset: i64,
     mut continuation: Option<Vec<u8>>,
     template_filters: Option<&[Identifier]>,
+    packages: &mut PackageResolver,
 ) -> Result<()> {
     info!(
         "Loading Active Contract Set (ACS) into SurrealDB at offset {} (resume={})...",
@@ -123,13 +125,15 @@ async fn load_acs(
                         contract_count += 1;
                         if cont_tok.is_some() { continuation = cont_tok; }
                         if batch.created.len() >= BATCH_SIZE {
-                            let to_commit = std::mem::take(&mut batch);
+                            let mut to_commit = std::mem::take(&mut batch);
+                            packages.add_package_rows(&mut to_commit).await;
                             store.write_acs_batch(&to_commit, acs_offset, continuation.clone(), false).await?;
                         }
                     }
                     Some(Err(e)) => return Err(e),
                     None => {
-                        let to_commit = std::mem::take(&mut batch);
+                        let mut to_commit = std::mem::take(&mut batch);
+                        packages.add_package_rows(&mut to_commit).await;
                         store.write_acs_batch(&to_commit, acs_offset, None, true).await?;
                         let elapsed = start_time.elapsed();
                         info!("ACS loading complete: {} contracts in {:.2}s at offset {}", contract_count, elapsed.as_secs_f64(), acs_offset);
@@ -140,7 +144,8 @@ async fn load_acs(
         }
 
         // Reaching here means the rotation timer fired (the None/Err arms return).
-        let to_commit = std::mem::take(&mut batch);
+        let mut to_commit = std::mem::take(&mut batch);
+        packages.add_package_rows(&mut to_commit).await;
         store
             .write_acs_batch(&to_commit, acs_offset, continuation.clone(), false)
             .await?;
@@ -356,6 +361,10 @@ pub async fn run_resilient_sync(
     let token_manager_clone = Arc::clone(&token_manager);
     let _refresh_handle = token_manager_clone.start_background_refresh();
     info!("Started background JWT token refresh");
+
+    // Looks up package names and versions for the `package` table.
+    let mut packages =
+        PackageResolver::new(sync_config.ledger_url.clone(), Arc::clone(&token_manager));
 
     // Start background offset progress logger with ETA
     let progress_store = store.clone();
@@ -690,6 +699,7 @@ pub async fn run_resilient_sync(
                         begin_offset,
                         None,
                         template_identifiers.as_deref(),
+                        &mut packages,
                     )
                     .await
                     {
@@ -723,6 +733,7 @@ pub async fn run_resilient_sync(
                         acs_offset,
                         continuation,
                         template_identifiers.as_deref(),
+                        &mut packages,
                     )
                     .await
                     {
@@ -853,7 +864,7 @@ pub async fn run_resilient_sync(
             idle_timeout: Duration::from_secs(sync_config.idle_timeout_secs),
             rotation_deadline: Some(rotation_at),
         };
-        match apply_batch_stream(&store, batch_stream, settings).await {
+        match apply_batch_stream(&store, batch_stream, settings, Some(&mut packages)).await {
             Ok(outcome) => {
                 info!(
                     "Stream processing completed. Offset {} -> {}, took {:?}",

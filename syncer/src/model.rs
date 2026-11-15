@@ -9,6 +9,7 @@
 //! | `exercised`   | `exercised:[<offset>, <node_id>]` | `(:Exercised)`  |
 //! | `party`       | `party:<party_id>`            | `(:Party)`          |
 //! | `sync_state`  | `sync_state:singleton` / `sync_state:stream` | `(:SyncState)` |
+//! | `package`     | `package:<package_id>`        | (new: name and version) |
 //!
 //! Relation tables (one per former relationship type), each with a stable edge
 //! id so that replaying an update never creates a second edge:
@@ -21,8 +22,9 @@
 //! | `consumes`    | exercised → created              | `[offset, node_id]` of the exercise |
 //! | `requested`   | party → transaction              | `[party_id, offset]`     |
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
+use client::packages::PackageInfo;
 use client::utils::{
     extract_contract_ids_from_value, extract_edges, structure_markers_from_transaction,
 };
@@ -39,6 +41,7 @@ pub const CREATED: &str = "created";
 pub const EXERCISED: &str = "exercised";
 pub const PARTY: &str = "party";
 pub const SYNC_STATE: &str = "sync_state";
+pub const PACKAGE: &str = "package";
 
 pub const ACTION: &str = "action";
 pub const CONSEQUENCE: &str = "consequence";
@@ -76,6 +79,11 @@ pub struct WriteBatch {
     pub target: Vec<Edge>,
     pub consumes: Vec<Edge>,
     pub requested: Vec<Edge>,
+    /// `package` rows (name and version of a package id), added by
+    /// [`crate::packages::PackageResolver`] before the batch is written.
+    pub packages: Vec<Row>,
+    /// Package ids referenced by the templates in this batch.
+    pub package_refs: BTreeSet<String>,
     /// Highest transaction offset in the batch, used as the resume point.
     pub max_offset: Option<i64>,
 }
@@ -96,6 +104,14 @@ impl WriteBatch {
             + self.target.len()
             + self.consumes.len()
             + self.requested.len()
+            + self.packages.len()
+    }
+
+    /// Records the package id of a template or interface id.
+    fn add_package_refs(&mut self, id: &Option<Identifier>) {
+        if let Some(id) = id {
+            self.package_refs.insert(id.package_id.clone());
+        }
     }
 
     /// Appends another batch to this one.
@@ -109,6 +125,8 @@ impl WriteBatch {
         self.target.extend(other.target);
         self.consumes.extend(other.consumes);
         self.requested.extend(other.requested);
+        self.packages.extend(other.packages);
+        self.package_refs.extend(other.package_refs);
         self.max_offset = match (self.max_offset, other.max_offset) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
@@ -123,6 +141,7 @@ impl WriteBatch {
             ("parties", &self.parties),
             ("created", &self.created),
             ("exercised", &self.exercised),
+            ("packages", &self.packages),
         ];
         for (name, rows) in rows {
             for row in rows {
@@ -166,6 +185,10 @@ pub fn exercised_id(offset: i64, node_id: i32) -> RecordId {
     RecordId::new(EXERCISED, offset_node_key(offset, node_id))
 }
 
+pub fn package_id(package_id: &str) -> RecordId {
+    RecordId::new(PACKAGE, package_id)
+}
+
 pub fn party_id(party: &str) -> RecordId {
     RecordId::new(PARTY, party)
 }
@@ -194,13 +217,35 @@ fn party_display_name(party: &str) -> &str {
     party.split("::").next().unwrap_or(party)
 }
 
-/// `{ package_id, module_name, entity_name }` of a template id.
-fn template_value(id: &Identifier) -> Value {
+/// `{ package_id, package_name, package, module_name, entity_name }` of a
+/// template or interface id.
+///
+/// `package` links to the `package:<package_id>` record, so
+/// `template.package.package_version` reads the version once the syncer has
+/// looked it up. `package_name` comes from the event itself and is left out
+/// when the event doesn't carry it (interface ids).
+fn template_value(id: &Identifier, package_name: &str) -> Value {
     let mut o = Object::new();
     o.insert("package_id", id.package_id.clone());
+    if !package_name.is_empty() {
+        o.insert("package_name", package_name.to_string());
+    }
+    o.insert("package", Value::RecordId(package_id(&id.package_id)));
     o.insert("module_name", id.module_name.clone());
     o.insert("entity_name", id.entity_name.clone());
     Value::Object(o)
+}
+
+/// The `package` row for a package's name and version.
+pub fn package_row(info: &PackageInfo) -> Row {
+    let mut data = Object::new();
+    data.insert("package_id", info.package_id.clone());
+    data.insert("package_name", info.package_name.clone());
+    data.insert("package_version", info.package_version.clone());
+    Row {
+        id: package_id(&info.package_id),
+        data,
+    }
 }
 
 /// Builds the `created` row for a created event. `name_suffix` is the offset
@@ -220,7 +265,7 @@ fn created_row(created: &CreatedEvent, offset: i64, node_id: i32, from_acs: bool
                 "template_name",
                 format!("{}.{}", id.module_name, id.entity_name),
             );
-            data.insert("template", template_value(id));
+            data.insert("template", template_value(id, &created.package_name));
         }
         None => {
             data.insert("name", format!("unknown@{name_suffix}"));
@@ -247,6 +292,12 @@ fn exercised_row(exercised: &ExercisedEvent, transaction: &Transaction) -> Row {
     let mut data = Object::new();
     data.insert("name", format!("{}@{}", exercised.choice, exercised.offset));
     data.insert("choice_name", exercised.choice.clone());
+    if let Some(id) = &exercised.template_id {
+        data.insert("template", template_value(id, &exercised.package_name));
+    }
+    if let Some(id) = &exercised.interface_id {
+        data.insert("interface", template_value(id, ""));
+    }
     data.insert("target_contract_id", exercised.contract_id.clone());
     data.insert("acting_parties", strings(&exercised.acting_parties));
     data.insert("consuming", exercised.consuming);
@@ -345,11 +396,14 @@ pub fn transaction_to_batch(tx: &Transaction) -> WriteBatch {
         match &event.event {
             Some(Event::Created(created)) => {
                 let row = created_row(created, created.offset, created.node_id, false);
+                batch.add_package_refs(&created.template_id);
                 node_ids.insert(created.node_id, row.id.clone());
                 batch.created.push(row);
             }
             Some(Event::Exercised(exercised)) => {
                 let row = exercised_row(exercised, tx);
+                batch.add_package_refs(&exercised.template_id);
+                batch.add_package_refs(&exercised.interface_id);
                 node_ids.insert(exercised.node_id, row.id.clone());
                 batch.exercised.push(row);
 
@@ -424,10 +478,12 @@ pub fn transaction_to_batch(tx: &Transaction) -> WriteBatch {
 /// Converts a contract from the active contract set into a `created` row.
 /// Its offset is -1 and node id 0, since it has no transaction in the graph.
 pub fn acs_created_to_batch(created: &CreatedEvent) -> WriteBatch {
-    WriteBatch {
+    let mut batch = WriteBatch {
         created: vec![created_row(created, -1, 0, true)],
         ..Default::default()
-    }
+    };
+    batch.add_package_refs(&created.template_id);
+    batch
 }
 
 #[cfg(test)]
@@ -507,6 +563,37 @@ mod tests {
         assert_eq!(b.consumes.len(), 1);
         assert_eq!(b.parties[0].id, party_id("alice::1220"));
         assert_eq!(b.requested[0].to, transaction_id(10));
+    }
+
+    #[test]
+    fn templates_carry_package_name_and_link() {
+        let mut tx = sample_tx();
+        let pkg = Identifier {
+            package_id: "pkg-abc".into(),
+            ..template()
+        };
+        for e in &mut tx.events {
+            match &mut e.event {
+                Some(Event::Created(c)) => {
+                    c.template_id = Some(pkg.clone());
+                    c.package_name = "my-assets".into();
+                }
+                Some(Event::Exercised(x)) => {
+                    x.template_id = Some(pkg.clone());
+                    x.package_name = "my-assets".into();
+                }
+                _ => {}
+            }
+        }
+        let b = transaction_to_batch(&tx);
+        assert_eq!(b.package_refs, BTreeSet::from(["pkg-abc".to_string()]));
+        for row in [&b.created[0], &b.exercised[0]] {
+            let t = row.data.get("template").expect("template");
+            let sql = t.to_sql();
+            assert!(sql.contains("package_name: 'my-assets'"), "{sql}");
+            assert!(sql.contains("package: package:"), "{sql}");
+        }
+        assert!(b.packages.is_empty());
     }
 
     #[test]
