@@ -20,6 +20,16 @@
 //! | `target`      | exercised → created              | `[offset, node_id]` of the exercise |
 //! | `consumes`    | exercised → created              | `[offset, node_id]` of the exercise |
 //! | `requested`   | party → transaction              | `[party_id, offset]`     |
+//!
+//! Topology (party-to-participant hosting, from `TopologyTransaction` updates)
+//! is an append-only log, so it is stored as records with record links rather
+//! than as graph edges per event. Only the current hosting state is an edge:
+//!
+//! | table / relation | record id / in → out | holds |
+//! |------------------|----------------------|-------|
+//! | `participant`    | `participant:<participant_id>` | display name |
+//! | `topology_event` | `topology_event:[<offset>, <index>]` | one hosting change, with `party` and `participant` record links |
+//! | `hosted_on`      | party → participant, id `[party_id, participant_id]` | current permission, `active`, offsets |
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,8 +37,9 @@ use client::utils::{
     extract_contract_ids_from_value, extract_edges, structure_markers_from_transaction,
 };
 use ledger_api::v2::{
-    CreatedEvent, ExercisedEvent, GetUpdatesResponse, Identifier, Transaction, event::Event,
-    get_updates_response::Update,
+    CreatedEvent, ExercisedEvent, GetUpdatesResponse, Identifier, ParticipantPermission,
+    TopologyTransaction, Transaction, event::Event, get_updates_response::Update,
+    topology_event::Event as TopologyKind,
 };
 use surrealdb::types::{Array, Number, Object, RecordId, ToSql, Value};
 
@@ -46,6 +57,10 @@ pub const TARGET: &str = "target";
 pub const CONSUMES: &str = "consumes";
 pub const REQUESTED: &str = "requested";
 
+pub const PARTICIPANT: &str = "participant";
+pub const TOPOLOGY_EVENT: &str = "topology_event";
+pub const HOSTED_ON: &str = "hosted_on";
+
 /// A record to upsert: `UPSERT <id> MERGE <data>`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
@@ -59,6 +74,18 @@ pub struct Edge {
     pub id: RecordId,
     pub from: RecordId,
     pub to: RecordId,
+}
+
+/// A change to the `hosted_on` edge between a party and a participant.
+/// Changes are applied in offset order, and one older than what the edge
+/// already holds is skipped, so replaying updates never rolls the state back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hosting {
+    pub id: RecordId,
+    pub from: RecordId,
+    pub to: RecordId,
+    /// Fields merged into the edge; always holds `last_offset`.
+    pub data: Object,
 }
 
 /// Everything one or more ledger updates write to the database.
@@ -76,7 +103,10 @@ pub struct WriteBatch {
     pub target: Vec<Edge>,
     pub consumes: Vec<Edge>,
     pub requested: Vec<Edge>,
-    /// Highest transaction offset in the batch, used as the resume point.
+    pub participants: Vec<Row>,
+    pub topology_events: Vec<Row>,
+    pub hosting: Vec<Hosting>,
+    /// Highest update offset in the batch, used as the resume point.
     pub max_offset: Option<i64>,
 }
 
@@ -96,6 +126,9 @@ impl WriteBatch {
             + self.target.len()
             + self.consumes.len()
             + self.requested.len()
+            + self.participants.len()
+            + self.topology_events.len()
+            + self.hosting.len()
     }
 
     /// Appends another batch to this one.
@@ -109,6 +142,9 @@ impl WriteBatch {
         self.target.extend(other.target);
         self.consumes.extend(other.consumes);
         self.requested.extend(other.requested);
+        self.participants.extend(other.participants);
+        self.topology_events.extend(other.topology_events);
+        self.hosting.extend(other.hosting);
         self.max_offset = match (self.max_offset, other.max_offset) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
@@ -123,6 +159,8 @@ impl WriteBatch {
             ("parties", &self.parties),
             ("created", &self.created),
             ("exercised", &self.exercised),
+            ("participants", &self.participants),
+            ("topology_events", &self.topology_events),
         ];
         for (name, rows) in rows {
             for row in rows {
@@ -149,6 +187,15 @@ impl WriteBatch {
                     e.to.to_sql()
                 ));
             }
+        }
+        for h in &self.hosting {
+            out.push_str(&format!(
+                "-- {HOSTED_ON} (applied only if newer than the stored edge)\n{{ id: {}, in: {}, out: {}, data: {} }};\n",
+                h.id.to_sql(),
+                h.from.to_sql(),
+                h.to.to_sql(),
+                h.data.to_sql()
+            ));
         }
         out
     }
@@ -321,10 +368,12 @@ fn party_row(party: &str) -> Row {
 }
 
 /// Converts one update from the ledger stream into the rows and edges it
-/// writes. Only transactions produce data; other updates give an empty batch.
+/// writes. Transactions and topology transactions produce data; other updates
+/// give an empty batch.
 pub fn update_to_batch(response: &GetUpdatesResponse) -> WriteBatch {
     match &response.update {
         Some(Update::Transaction(tx)) => transaction_to_batch(tx),
+        Some(Update::TopologyTransaction(t)) => topology_to_batch(t),
         _ => WriteBatch::default(),
     }
 }
@@ -430,6 +479,150 @@ pub fn acs_created_to_batch(created: &CreatedEvent) -> WriteBatch {
     }
 }
 
+pub fn participant_id(participant: &str) -> RecordId {
+    RecordId::new(PARTICIPANT, participant)
+}
+
+/// The short name of a participant (`participant1` for
+/// `PAR::participant1::1220...`), used as its label.
+fn participant_display_name(participant: &str) -> &str {
+    let mut parts = participant.split("::");
+    match (parts.next(), parts.next()) {
+        (Some("PAR"), Some(name)) => name,
+        (Some(first), _) => first,
+        _ => participant,
+    }
+}
+
+fn participant_row(participant: &str) -> Row {
+    let mut data = Object::new();
+    data.insert("participant_id", participant.to_string());
+    data.insert("name", participant_display_name(participant).to_string());
+    Row {
+        id: participant_id(participant),
+        data,
+    }
+}
+
+/// `submission`, `confirmation` or `observation`; `None` when unspecified.
+fn permission_name(permission: i32) -> Option<&'static str> {
+    match ParticipantPermission::try_from(permission).ok()? {
+        ParticipantPermission::Submission => Some("submission"),
+        ParticipantPermission::Confirmation => Some("confirmation"),
+        ParticipantPermission::Observation => Some("observation"),
+        ParticipantPermission::Unspecified => None,
+    }
+}
+
+/// Converts a topology transaction into `topology_event` records, the parties
+/// and participants they link to, and the `hosted_on` changes they imply.
+pub fn topology_to_batch(t: &TopologyTransaction) -> WriteBatch {
+    let mut batch = WriteBatch {
+        max_offset: Some(t.offset),
+        ..Default::default()
+    };
+    let record_time = t.record_time.as_ref().and_then(timestamp_to_datetime);
+    let mut seen_parties: HashSet<&str> = HashSet::new();
+    let mut seen_participants: HashSet<&str> = HashSet::new();
+    for (index, event) in t.events.iter().enumerate() {
+        let (kind, party, participant, permission) = match &event.event {
+            Some(TopologyKind::ParticipantAuthorizationAdded(e)) => (
+                "added",
+                &e.party_id,
+                &e.participant_id,
+                permission_name(e.participant_permission),
+            ),
+            Some(TopologyKind::ParticipantAuthorizationChanged(e)) => (
+                "changed",
+                &e.party_id,
+                &e.participant_id,
+                permission_name(e.participant_permission),
+            ),
+            Some(TopologyKind::ParticipantAuthorizationOnboarding(e)) => (
+                "onboarding",
+                &e.party_id,
+                &e.participant_id,
+                permission_name(e.participant_permission),
+            ),
+            Some(TopologyKind::ParticipantAuthorizationRevoked(e)) => {
+                ("revoked", &e.party_id, &e.participant_id, None)
+            }
+            None => continue,
+        };
+        if seen_parties.insert(party) {
+            batch.parties.push(party_row(party));
+        }
+        if seen_participants.insert(participant) {
+            batch.participants.push(participant_row(participant));
+        }
+
+        let mut data = Object::new();
+        data.insert(
+            "name",
+            format!("{kind}:{}@{}", party_display_name(party), t.offset),
+        );
+        data.insert("kind", kind);
+        data.insert("offset", t.offset);
+        data.insert("index", index as i64);
+        data.insert("update_id", t.update_id.clone());
+        data.insert("synchronizer_id", t.synchronizer_id.clone());
+        if let Some(dt) = record_time {
+            data.insert("record_time", Value::Datetime(dt));
+        }
+        data.insert("party", Value::RecordId(party_id(party)));
+        data.insert("participant", Value::RecordId(participant_id(participant)));
+        if let Some(p) = permission {
+            data.insert("permission", p);
+        }
+        batch.topology_events.push(Row {
+            id: RecordId::new(
+                TOPOLOGY_EVENT,
+                Array::from(vec![
+                    Value::Number(Number::Int(t.offset)),
+                    Value::Number(Number::Int(index as i64)),
+                ]),
+            ),
+            data,
+        });
+
+        let mut edge = Object::new();
+        edge.insert("party_id", party.clone());
+        edge.insert("participant_id", participant.clone());
+        edge.insert("last_offset", t.offset);
+        edge.insert("onboarding", kind == "onboarding");
+        if let Some(p) = permission {
+            edge.insert("permission", p);
+        }
+        match kind {
+            "revoked" => {
+                edge.insert("active", false);
+                edge.insert("revoked_offset", t.offset);
+            }
+            "added" | "onboarding" => {
+                edge.insert("active", true);
+                edge.insert("since_offset", t.offset);
+                edge.insert("revoked_offset", Value::None);
+            }
+            _ => {
+                edge.insert("active", true);
+            }
+        }
+        batch.hosting.push(Hosting {
+            id: RecordId::new(
+                HOSTED_ON,
+                Array::from(vec![
+                    Value::String(party.clone()),
+                    Value::String(participant.clone()),
+                ]),
+            ),
+            from: party_id(party),
+            to: participant_id(participant),
+            data: edge,
+        });
+    }
+    batch
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,6 +714,64 @@ mod tests {
             other => panic!("expected nested object, got {other:?}"),
         }
         assert_eq!(data.get("name"), Some(&Value::String("Asset@10".into())));
+    }
+
+    fn topology_tx() -> TopologyTransaction {
+        use ledger_api::v2::{
+            ParticipantAuthorizationAdded, ParticipantAuthorizationRevoked, TopologyEvent,
+        };
+        TopologyTransaction {
+            update_id: "t1".into(),
+            offset: 20,
+            synchronizer_id: "sync::1220".into(),
+            events: vec![
+                TopologyEvent {
+                    event: Some(TopologyKind::ParticipantAuthorizationAdded(
+                        ParticipantAuthorizationAdded {
+                            party_id: "alice::1220".into(),
+                            participant_id: "PAR::participant1::1220".into(),
+                            participant_permission: ParticipantPermission::Submission as i32,
+                        },
+                    )),
+                },
+                TopologyEvent {
+                    event: Some(TopologyKind::ParticipantAuthorizationRevoked(
+                        ParticipantAuthorizationRevoked {
+                            party_id: "alice::1220".into(),
+                            participant_id: "PAR::participant2::1220".into(),
+                        },
+                    )),
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn topology_produces_log_records_and_hosting_changes() {
+        let b = topology_to_batch(&topology_tx());
+        assert_eq!(b.max_offset, Some(20));
+        assert_eq!(b.topology_events.len(), 2);
+        assert_eq!(b.parties.len(), 1);
+        assert_eq!(b.participants.len(), 2);
+        assert_eq!(
+            b.participants[0].data.get("name"),
+            Some(&Value::String("participant1".into()))
+        );
+        let added = &b.topology_events[0].data;
+        assert_eq!(added.get("kind"), Some(&Value::String("added".into())));
+        assert_eq!(
+            added.get("permission"),
+            Some(&Value::String("submission".into()))
+        );
+        assert_eq!(
+            added.get("party"),
+            Some(&Value::RecordId(party_id("alice::1220")))
+        );
+        assert_eq!(b.hosting.len(), 2);
+        assert_eq!(b.hosting[0].data.get("active"), Some(&Value::Bool(true)));
+        assert_eq!(b.hosting[1].data.get("active"), Some(&Value::Bool(false)));
+        assert!(b.hosting[1].data.get("permission").is_none());
     }
 
     #[test]

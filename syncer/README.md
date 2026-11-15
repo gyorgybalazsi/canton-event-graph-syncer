@@ -26,6 +26,9 @@ The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer wa
 - **Fresh start**: deletes the synced data and starts from the current ledger end
 - **Batched writes**: one database transaction per batch of updates, one
   statement per table
+- **Topology**: party-to-participant hosting changes (topology transactions)
+  are kept as a log, plus the current hosting state per party and participant.
+  Turn off with `include_topology_events = false` in the ledger profile
 
 ## Data model
 
@@ -37,6 +40,8 @@ The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer wa
 | `created` | `created:<contract_id>` | `name` (`<Entity>@<offset>`), `contract_id`, `template_name`, `template { package_id, module_name, entity_name }`, `signatories [..]`, `offset`, `node_id`, `created_at`, `create_arguments { .. }`, `from_acs` |
 | `exercised` | `exercised:[<offset>, <node_id>]` | `name` (`<Choice>@<offset>`), `choice_name`, `target_contract_id`, `acting_parties [..]`, `consuming`, `result_contract_ids [..]`, `offset`, `node_id`, `last_descendant_node_id`, `transaction_effective_at`, `choice_argument { .. }` |
 | `party` | `party:<party_id>` | `party_id`, `name` (the part before `::`) |
+| `participant` | `participant:<participant_id>` | `participant_id`, `name` (`participant1` for `PAR::participant1::1220...`) |
+| `topology_event` | `topology_event:[<offset>, <index>]` | `name` (`<kind>:<party>@<offset>`), `kind` (`added`, `changed`, `onboarding`, `revoked`), `party` and `participant` (record links), `permission` (`submission`, `confirmation`, `observation`), `offset`, `index`, `update_id`, `synchronizer_id`, `record_time` |
 | `sync_state` | `sync_state:singleton`, `sync_state:stream` | ACS load marker (`acs_offset`, `acs_continuation_token`, `acs_complete`); last written offset (`last_offset`) |
 
 Record ids come from the ledger, so replaying an update updates the same
@@ -53,10 +58,18 @@ Contracts loaded from the ACS have `offset = -1`, `node_id = 0` and
 | `target` | exercised → created | The contract the choice was exercised on |
 | `consumes` | exercised → created | Contract archived by a consuming choice |
 | `requested` | party → transaction | Party that submitted the transaction |
+| `hosted_on` | party → participant | Current hosting: `permission`, `active` (false once revoked), `onboarding`, `since_offset`, `revoked_offset`, `last_offset` |
 
 Each edge has a stable id (for example `target:[<offset>, <node_id>]`) and a
 unique index on `in, out`, so it is written at most once. `target` and
 `consumes` are only written when the contract is in the database.
+
+Topology changes are a log, not a graph, so each change is a
+`topology_event` record with record links to its party and participant
+(`<~topology_event` from a party lists its history). Only the current state is
+an edge: `hosted_on:[<party_id>, <participant_id>]` is updated by each change
+in offset order, and a replayed older change is ignored. A revoked hosting
+stays as an edge with `active = false`.
 
 ### Contract and choice arguments
 
@@ -219,6 +232,11 @@ FROM exercised WHERE target_contract_id = '00...';
 
 -- The event tree of a transaction
 SELECT ->action->exercised->consequence->? AS children FROM transaction:12345;
+
+-- Where a party is hosted now, and its hosting history
+SELECT ->hosted_on[WHERE active]->participant.name AS hosted_on,
+       <~topology_event.{ kind, permission, offset } AS history
+FROM party:⟨alice::1220...⟩;
 
 -- Active contracts per template (not consumed)
 SELECT template_name, count() AS active FROM created

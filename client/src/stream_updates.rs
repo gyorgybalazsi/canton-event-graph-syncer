@@ -1,7 +1,8 @@
 use crate::utils::build_filters_by_party_with_identifiers;
 use anyhow::{Context, Result};
 use ledger_api::v2::{
-    EventFormat, GetUpdatesRequest, Identifier, TransactionFormat, TransactionShape, UpdateFormat,
+    EventFormat, GetUpdatesRequest, Identifier, ParticipantAuthorizationTopologyFormat,
+    TopologyFormat, TransactionFormat, TransactionShape, UpdateFormat,
     update_service_client::UpdateServiceClient,
 };
 use tonic::metadata::MetadataValue;
@@ -10,6 +11,8 @@ use tracing::{debug, error, info};
 /// Streams ledger updates for the given parties, starting after `begin_exclusive` offset.
 /// `end_inclusive` is optional; if set, the stream will end at that offset.
 /// `template_filters` is optional; if provided, only events matching those templates are streamed.
+/// With `include_topology`, the stream also carries topology transactions
+/// (party-to-participant authorization changes) for the same parties.
 pub async fn stream_updates(
     access_token: Option<&str>,
     begin_exclusive: i64,
@@ -17,6 +20,7 @@ pub async fn stream_updates(
     parties: Vec<String>,
     url: String,
     template_filters: Option<&[Identifier]>,
+    include_topology: bool,
 ) -> Result<tonic::Streaming<ledger_api::v2::GetUpdatesResponse>> {
     info!(
         "Starting stream_updates at {}:{}: url={}, begin_exclusive={}, end_inclusive={:?}, parties={:?}, template_filters={:?}",
@@ -62,6 +66,12 @@ pub async fn stream_updates(
         }
     };
 
+    let include_topology_events = include_topology.then(|| TopologyFormat {
+        include_participant_authorization_events: Some(ParticipantAuthorizationTopologyFormat {
+            parties: parties.clone(),
+        }),
+    });
+
     let filters_by_party = build_filters_by_party_with_identifiers(&parties, template_filters);
     debug!(
         "Built filters_by_party at {}:{}: {:?}",
@@ -84,7 +94,7 @@ pub async fn stream_updates(
     let update_format = UpdateFormat {
         include_transactions: Some(transaction_format),
         include_reassignments: None,
-        include_topology_events: None,
+        include_topology_events,
         include_transactions_and_reassignments: None,
     };
 
