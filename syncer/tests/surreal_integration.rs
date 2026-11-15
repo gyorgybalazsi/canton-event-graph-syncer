@@ -18,7 +18,7 @@ use surrealdb::opt::auth::Root;
 use surrealdb::types::{Number, Value};
 use syncer::config::{self, DbConfig};
 use syncer::model::{self, WriteBatch};
-use syncer::store::Store;
+use syncer::store::{BACKGROUND_INDEXES, Store};
 use syncer::writer::{StreamSettings, apply_batch_stream};
 
 const NS: &str = "test";
@@ -615,6 +615,48 @@ async fn reset_and_clear() {
         assert_eq!(count(&store, table).await, 0, "{table}");
     }
     assert_eq!(store.last_processed_offset().await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn offset_indexes_are_built_before_writing_to_an_existing_ledger() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+
+    // A ledger synced before these indexes existed.
+    let root = any::connect(server.url()).await.unwrap();
+    root.signin(Root {
+        username: "root".into(),
+        password: "root".into(),
+    })
+    .await
+    .unwrap();
+    root.use_ns(NS).use_db(DB).await.unwrap();
+    let mut r = root
+        .query(
+            "FOR $i IN 0..30000 { CREATE type::record('exercised', [$i, 0]) SET offset = $i, node_id = 0; };
+             FOR $i IN 0..30000 { CREATE type::record('transaction', $i) SET offset = $i; };",
+        )
+        .await
+        .unwrap();
+    assert!(r.take_errors().is_empty());
+
+    // Connecting builds the indexes in the background and waits for them, so
+    // the writes that follow don't race the build.
+    let store = server.store().await;
+    for (index, table) in BACKGROUND_INDEXES {
+        let info = query_value(&store, &format!("INFO FOR INDEX {index} ON {table};")).await;
+        let status = match &info {
+            Value::Object(o) => match o.get("building") {
+                Some(Value::Object(b)) => b.get("status").and_then(first_string),
+                _ => None,
+            },
+            _ => None,
+        };
+        assert_eq!(status.as_deref(), Some("ready"), "{index}: {info:?}");
+    }
+    write_fixture(&store).await;
+    store.clear_all().await.unwrap();
+    assert_eq!(count(&store, "exercised").await, 0);
 }
 
 #[tokio::test]

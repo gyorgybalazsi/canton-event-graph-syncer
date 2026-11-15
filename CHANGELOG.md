@@ -9,7 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - `syncer` indexes `transaction.offset` and `exercised.offset`. Readers that load the
   newest transactions or an offset range, such as surrealdb-explorer, no longer
-  scan the whole table.
+  scan the whole table. On an existing ledger the indexes are built in the
+  background, in batches; the syncer waits until they are ready before it
+  writes, logging the progress.
 
 ### Removed
 - `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
