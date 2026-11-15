@@ -36,6 +36,8 @@ pub struct SyncConfig {
     pub flush_timeout_secs: u64,
     /// Idle timeout in seconds - reconnect if no updates received for this duration
     pub idle_timeout_secs: u64,
+    /// Also sync topology transactions (party-to-participant hosting changes).
+    pub include_topology_events: bool,
 }
 
 impl SyncConfig {
@@ -242,6 +244,7 @@ async fn probe_record_time_after(
         parties.to_vec(),
         ledger_url.to_string(),
         template_filters,
+        false,
     )
     .await?;
 
@@ -793,6 +796,7 @@ pub async fn run_resilient_sync(
             sync_config.parties.clone(),
             sync_config.ledger_url.clone(),
             template_identifiers.as_deref(),
+            sync_config.include_topology_events,
         )
         .await
         {

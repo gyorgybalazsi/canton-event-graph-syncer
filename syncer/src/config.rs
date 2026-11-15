@@ -262,6 +262,14 @@ pub struct LedgerConfig {
     /// Positive value: absolute offset. Negative value: relative to ledger end (e.g., -5000000).
     /// If not specified, falls back to ledger pruning offset.
     pub starting_offset: Option<i64>,
+    /// Also sync topology transactions (party-to-participant hosting
+    /// changes) for the same parties. Defaults to true.
+    #[serde(default = "default_true")]
+    pub include_topology_events: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Read and parse the config file
@@ -405,6 +413,7 @@ mod tests {
                 url: "http://localhost".to_string(),
                 template_filters: None,
                 starting_offset: None,
+                include_topology_events: true,
             },
             keycloak,
         }
