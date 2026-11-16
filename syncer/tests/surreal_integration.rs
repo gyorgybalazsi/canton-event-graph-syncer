@@ -10,8 +10,11 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use ledger_api::v2::{
-    CreatedEvent, Event, ExercisedEvent, GetUpdatesResponse, Identifier, OffsetCheckpoint, Record,
-    RecordField, Transaction, Value as DamlValue, event, get_updates_response::Update, value::Sum,
+    CreatedEvent, Event, ExercisedEvent, GetUpdatesResponse, Identifier, OffsetCheckpoint,
+    ParticipantAuthorizationAdded, ParticipantAuthorizationChanged,
+    ParticipantAuthorizationRevoked, ParticipantPermission, Record, RecordField, TopologyEvent,
+    TopologyTransaction, Transaction, Value as DamlValue, event, get_updates_response::Update,
+    topology_event, value::Sum,
 };
 use surrealdb::engine::any;
 use surrealdb::opt::auth::Root;
@@ -303,6 +306,54 @@ fn update(tx: Transaction) -> GetUpdatesResponse {
     }
 }
 
+const ALICE: &str = "alice::1220";
+const P1: &str = "PAR::participant1::1220";
+
+fn topology(offset: i64, event: topology_event::Event) -> GetUpdatesResponse {
+    GetUpdatesResponse {
+        update: Some(Update::TopologyTransaction(TopologyTransaction {
+            update_id: format!("topo-{offset}"),
+            offset,
+            synchronizer_id: "sync::1220".into(),
+            record_time: ts(1_700_000_000 + offset),
+            events: vec![TopologyEvent { event: Some(event) }],
+            ..Default::default()
+        })),
+    }
+}
+
+fn hosting_added(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationAdded(ParticipantAuthorizationAdded {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+            participant_permission: ParticipantPermission::Submission as i32,
+        }),
+    )
+}
+
+fn hosting_changed(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationChanged(ParticipantAuthorizationChanged {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+            participant_permission: ParticipantPermission::Observation as i32,
+        }),
+    )
+}
+
+fn hosting_revoked(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationRevoked(ParticipantAuthorizationRevoked {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+        }),
+    )
+}
+
 async fn count(store: &Store, table: &str) -> i64 {
     let mut r = store
         .client()
@@ -504,6 +555,117 @@ async fn repeated_message_creates_no_duplicates() {
         ("requested", 1),
     ] {
         assert_eq!(count(&store, table).await, expected, "{table}");
+    }
+}
+
+#[tokio::test]
+async fn topology_events_are_logged_and_hosting_tracks_the_latest_state() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+    let store = server.store().await;
+
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(20)))
+        .await
+        .unwrap();
+    // Added and changed in one batch: applied in order.
+    let mut batch = model::update_to_batch(&hosting_changed(21));
+    batch.extend(model::update_to_batch(&hosting_revoked(22)));
+    store.write_batch(&batch).await.unwrap();
+
+    assert_eq!(count(&store, "topology_event").await, 3);
+    assert_eq!(count(&store, "participant").await, 1);
+    assert_eq!(count(&store, "party").await, 1);
+    assert_eq!(count(&store, "hosted_on").await, 1);
+    assert_eq!(store.last_processed_offset().await.unwrap(), Some(22));
+
+    // Log records link to their party and participant, in both directions.
+    let kinds = query_value(
+        &store,
+        "SELECT VALUE kind FROM topology_event WHERE participant.name = 'participant1' ORDER BY offset;",
+    )
+    .await;
+    assert_eq!(
+        kinds,
+        Value::Array(vec!["added", "changed", "revoked"].into_iter().collect())
+    );
+    let via_party = query_value(
+        &store,
+        "SELECT VALUE count(<~topology_event) FROM ONLY type::record('party', 'alice::1220');",
+    )
+    .await;
+    assert_eq!(via_party, Value::Number(Number::Int(3)));
+    let record_time = query_value(
+        &store,
+        "SELECT VALUE type::is_datetime(record_time) FROM ONLY topology_event:[20, 0];",
+    )
+    .await;
+    assert_eq!(record_time, Value::Bool(true));
+
+    // The edge holds the latest state: revoked, last permission kept.
+    let edge = query_value(
+        &store,
+        "SELECT VALUE [active, permission, since_offset, revoked_offset, last_offset] \
+         FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    let expected: Value = Value::Array(
+        vec![
+            Value::Bool(false),
+            Value::String("observation".into()),
+            Value::Number(Number::Int(20)),
+            Value::Number(Number::Int(22)),
+            Value::Number(Number::Int(22)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    assert_eq!(edge, expected);
+    let hosted = query_value(
+        &store,
+        "SELECT VALUE ->hosted_on->participant.name FROM ONLY type::record('party', 'alice::1220');",
+    )
+    .await;
+    assert_eq!(first_string(&hosted).as_deref(), Some("participant1"));
+
+    // Replaying an older update adds no records and doesn't roll the edge back.
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(20)))
+        .await
+        .unwrap();
+    assert_eq!(count(&store, "topology_event").await, 3);
+    let active = query_value(
+        &store,
+        "SELECT VALUE active FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    assert_eq!(active, Value::Bool(false));
+
+    // Hosting again after the revocation reactivates the edge.
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(30)))
+        .await
+        .unwrap();
+    let edge = query_value(
+        &store,
+        "SELECT VALUE [active, since_offset, revoked_offset] \
+         FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    let expected: Value = Value::Array(
+        vec![
+            Value::Bool(true),
+            Value::Number(Number::Int(30)),
+            Value::None,
+        ]
+        .into_iter()
+        .collect(),
+    );
+    assert_eq!(edge, expected);
+
+    store.clear_all().await.unwrap();
+    for table in ["topology_event", "participant", "hosted_on"] {
+        assert_eq!(count(&store, table).await, 0, "{table}");
     }
 }
 

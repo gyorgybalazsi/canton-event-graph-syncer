@@ -12,6 +12,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scan the whole table. On an existing ledger the indexes are built in the
   background, in batches; the syncer waits until they are ready before it
   writes, logging the progress.
+- `syncer` now syncs topology transactions (party-to-participant hosting
+  changes): a `topology_event` log with record links to `party` and the new
+  `participant` table, plus a `hosted_on` edge holding each party's current
+  hosting. `client::stream_updates` takes an `include_topology` flag; the
+  syncer's `include_topology_events` profile setting defaults to true.
 
 ### Removed
 - `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
