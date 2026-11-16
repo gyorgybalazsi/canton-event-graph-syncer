@@ -837,6 +837,7 @@ dependencies = [
  "futures-util",
  "ledger-api",
  "nix",
+ "prost",
  "prost-types",
  "regex",
  "reqwest 0.12.28",

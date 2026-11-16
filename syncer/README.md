@@ -37,17 +37,50 @@ The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer wa
 | Table | Record id | Main fields |
 |-------|-----------|-------------|
 | `transaction` | `transaction:<offset>` | `name` (`TX@<offset>`), `offset`, `update_id`, `command_id`, `workflow_id`, `synchronizer_id`, `effective_at`, `record_time`, `trace_context { traceparent, tracestate }` |
-| `created` | `created:<contract_id>` | `name` (`<Entity>@<offset>`), `contract_id`, `template_name`, `template { package_id, module_name, entity_name }`, `signatories [..]`, `offset`, `node_id`, `created_at`, `create_arguments { .. }`, `from_acs` |
-| `exercised` | `exercised:[<offset>, <node_id>]` | `name` (`<Choice>@<offset>`), `choice_name`, `target_contract_id`, `acting_parties [..]`, `consuming`, `result_contract_ids [..]`, `offset`, `node_id`, `last_descendant_node_id`, `transaction_effective_at`, `choice_argument { .. }` |
+| `created` | `created:<contract_id>` | `name` (`<Entity>@<offset>`), `contract_id`, `template_name`, `template { package_id, package_name, package, module_name, entity_name }`, `signatories [..]`, `offset`, `node_id`, `created_at`, `create_arguments { .. }`, `from_acs` |
+| `exercised` | `exercised:[<offset>, <node_id>]` | `name` (`<Choice>@<offset>`), `choice_name`, `template { .. }`, `interface { .. }` (for interface choices), `target_contract_id`, `acting_parties [..]`, `consuming`, `result_contract_ids [..]`, `offset`, `node_id`, `last_descendant_node_id`, `transaction_effective_at`, `choice_argument { .. }` |
 | `party` | `party:<party_id>` | `party_id`, `name` (the part before `::`) |
 | `participant` | `participant:<participant_id>` | `participant_id`, `name` (`participant1` for `PAR::participant1::1220...`) |
 | `topology_event` | `topology_event:[<offset>, <index>]` | `name` (`<kind>:<party>@<offset>`), `kind` (`added`, `changed`, `onboarding`, `revoked`), `party` and `participant` (record links), `permission` (`submission`, `confirmation`, `observation`), `offset`, `index`, `update_id`, `synchronizer_id`, `record_time` |
+| `package` | `package:<package_id>` | `package_id`, `package_name`, `package_version` |
 | `sync_state` | `sync_state:singleton`, `sync_state:stream` | ACS load marker (`acs_offset`, `acs_continuation_token`, `acs_complete`); last written offset (`last_offset`) |
 
 Record ids come from the ledger, so replaying an update updates the same
 records instead of adding new ones. Timestamps are SurrealQL datetimes.
 Contracts loaded from the ACS have `offset = -1`, `node_id = 0` and
 `from_acs = true`.
+
+### Package names and versions
+
+A package id changes with every version of a Daml package, so the syncer also
+records which package and version each id is. `template.package_name` comes
+with every event. `template.package` is a link to the `package:<package_id>`
+record, which the syncer fills in by asking the ledger the first time it sees
+an id. No DARs or generated code are involved:
+
+- `PackageService.ListVettedPackages` answers for many ids at once. If the
+  syncer's user may call `GetParticipantId` (participant admin), the lookup is
+  limited to this participant's vetting state; otherwise it reads the state of
+  every participant, which is slower on networks with many participants.
+- Ids it doesn't list, such as an old version that was unvetted after an
+  upgrade but still has active contracts, are read with
+  `PackageService.GetPackage`, from the metadata in the Daml-LF archive.
+
+The `package` row is written in the same transaction as the batch that first
+refers to it. If the ledger doesn't know an id, or the lookup fails or times
+out (30 seconds per call), the sync carries on without it and asks again about
+ten minutes later. Until then `template.package.package_version` is `NONE`.
+
+```sql
+-- All contracts of a template, across package versions
+SELECT * FROM created
+WHERE template.package_name = 'my-assets' AND template.entity_name = 'Asset';
+
+-- Active contracts per package version
+SELECT template.package.package_version AS version, count() AS active
+FROM created WHERE template.package_name = 'my-assets' AND count(<-consumes) = 0
+GROUP BY version;
+```
 
 ### Relations
 
@@ -99,7 +132,7 @@ WHERE create_arguments.address.city = 'Zurich';
 
 Defined at startup with `DEFINE ... IF NOT EXISTS`: the unique `in, out`
 indexes on every relation, plus `created(offset, node_id)`,
-`created(template_name)`, `created(from_acs)`, `exercised(choice_name)`,
+`created(template_name)`, `created(template.package_name)`, `created(from_acs)`, `exercised(choice_name)`,
 `exercised(target_contract_id)` and `transaction(update_id)`.
 
 ## Prerequisites

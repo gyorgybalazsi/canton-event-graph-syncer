@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 
 pub use crate::config::DbConfig;
 use crate::model::{
-    ACTION, CONSEQUENCE, CONSUMES, CREATED, EXERCISED, Edge, Hosting, PARTICIPANT, PARTY,
+    ACTION, CONSEQUENCE, CONSUMES, CREATED, EXERCISED, Edge, Hosting, PACKAGE, PARTICIPANT, PARTY,
     REQUESTED, Row, TARGET, TOPOLOGY_EVENT, TRANSACTION, WriteBatch,
 };
 
@@ -58,6 +58,7 @@ DEFINE TABLE IF NOT EXISTS created TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS exercised TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS party TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS sync_state TYPE NORMAL SCHEMALESS;
+DEFINE TABLE IF NOT EXISTS package TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS action TYPE RELATION IN transaction OUT created | exercised SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS consequence TYPE RELATION IN exercised OUT created | exercised SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS target TYPE RELATION IN exercised OUT created SCHEMALESS;
@@ -70,6 +71,7 @@ DEFINE INDEX IF NOT EXISTS consumes_in_out ON consumes FIELDS in, out UNIQUE;
 DEFINE INDEX IF NOT EXISTS requested_in_out ON requested FIELDS in, out UNIQUE;
 DEFINE INDEX IF NOT EXISTS created_offset_node ON created FIELDS offset, node_id;
 DEFINE INDEX IF NOT EXISTS created_template_name ON created FIELDS template_name;
+DEFINE INDEX IF NOT EXISTS created_package_name ON created FIELDS template.package_name;
 DEFINE INDEX IF NOT EXISTS created_from_acs ON created FIELDS from_acs;
 DEFINE INDEX IF NOT EXISTS exercised_choice_name ON exercised FIELDS choice_name;
 DEFINE INDEX IF NOT EXISTS exercised_target_contract ON exercised FIELDS target_contract_id;
@@ -433,7 +435,7 @@ impl Store {
                 "BEGIN;
                  DELETE action; DELETE consequence; DELETE target; DELETE consumes; DELETE requested;
                  DELETE hosted_on; DELETE topology_event; DELETE participant;
-                 DELETE transaction; DELETE created; DELETE exercised; DELETE party; DELETE sync_state;
+                 DELETE transaction; DELETE created; DELETE exercised; DELETE party; DELETE package; DELETE sync_state;
                  COMMIT;",
             )
             .await?;
@@ -521,7 +523,8 @@ pub fn batch_query(
     let mut vars: Vec<(String, Value)> = Vec::new();
 
     // Records first, so the edges below can find both ends.
-    let rows: [(&str, &[Row]); 6] = [
+    let rows: [(&str, &[Row]); 7] = [
+        (PACKAGE, &batch.packages),
         (TRANSACTION, &batch.transactions),
         (PARTY, &batch.parties),
         (PARTICIPANT, &batch.participants),
