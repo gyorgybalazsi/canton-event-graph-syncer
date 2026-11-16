@@ -111,12 +111,16 @@ async fn flush(
         return Ok(());
     }
     let mut batch = std::mem::take(pending);
-    if let Some(packages) = packages {
+    let mut packages = packages;
+    if let Some(packages) = packages.as_deref_mut() {
         packages.add_package_rows(&mut batch).await;
     }
     let rows = batch.row_count();
     let start = Instant::now();
     store.write_batch(&batch).await?;
+    if let Some(packages) = packages {
+        packages.mark_written(&batch);
+    }
     info!(
         "Committed batch ({reason}): {} updates, {rows} rows in {:?}",
         *updates,

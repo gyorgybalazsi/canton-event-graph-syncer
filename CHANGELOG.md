@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `syncer` records the package name and version of every contract and
+  exercise: `template.package_name`, and a `template.package` link to a new
+  `package` table (`package_name`, `package_version`), looked up from the
+  Ledger API (`ListVettedPackages`, then `GetPackage` for unvetted packages).
 - `syncer-ui`: an optional desktop window (iced) that starts and stops the
   `syncer` program and shows its log (`just sync-ui`). It is not in
   `default-members`, so a plain `cargo build` skips it.

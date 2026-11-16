@@ -130,6 +130,7 @@ async fn load_acs(
                             let mut to_commit = std::mem::take(&mut batch);
                             packages.add_package_rows(&mut to_commit).await;
                             store.write_acs_batch(&to_commit, acs_offset, continuation.clone(), false).await?;
+                            packages.mark_written(&to_commit);
                         }
                     }
                     Some(Err(e)) => return Err(e),
@@ -137,6 +138,7 @@ async fn load_acs(
                         let mut to_commit = std::mem::take(&mut batch);
                         packages.add_package_rows(&mut to_commit).await;
                         store.write_acs_batch(&to_commit, acs_offset, None, true).await?;
+                        packages.mark_written(&to_commit);
                         let elapsed = start_time.elapsed();
                         info!("ACS loading complete: {} contracts in {:.2}s at offset {}", contract_count, elapsed.as_secs_f64(), acs_offset);
                         return Ok(());
@@ -151,6 +153,7 @@ async fn load_acs(
         store
             .write_acs_batch(&to_commit, acs_offset, continuation.clone(), false)
             .await?;
+        packages.mark_written(&to_commit);
         info!("Rotating ACS stream ahead of token expiry; resuming from continuation token");
         continue;
     }

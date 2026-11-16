@@ -55,11 +55,21 @@ Contracts loaded from the ACS have `offset = -1`, `node_id = 0` and
 A package id changes with every version of a Daml package, so the syncer also
 records which package and version each id is. `template.package_name` comes
 with every event. `template.package` is a link to the `package:<package_id>`
-record, which the syncer fills in by asking the ledger
-(`PackageService.ListVettedPackages`) the first time it sees an id. No DARs or
-generated code are involved. Only vetted packages are listed; if the ledger
-doesn't list an id, or the lookup fails, the sync carries on and asks again
-about ten minutes later.
+record, which the syncer fills in by asking the ledger the first time it sees
+an id. No DARs or generated code are involved:
+
+- `PackageService.ListVettedPackages` answers for many ids at once. If the
+  syncer's user may call `GetParticipantId` (participant admin), the lookup is
+  limited to this participant's vetting state; otherwise it reads the state of
+  every participant, which is slower on networks with many participants.
+- Ids it doesn't list, such as an old version that was unvetted after an
+  upgrade but still has active contracts, are read with
+  `PackageService.GetPackage`, from the metadata in the Daml-LF archive.
+
+The `package` row is written in the same transaction as the batch that first
+refers to it. If the ledger doesn't know an id, or the lookup fails or times
+out (30 seconds per call), the sync carries on without it and asks again about
+ten minutes later. Until then `template.package.package_version` is `NONE`.
 
 ```sql
 -- All contracts of a template, across package versions

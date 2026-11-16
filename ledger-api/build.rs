@@ -108,7 +108,10 @@ fn get_all_protos(src_paths: &[&str]) -> Result<Vec<PathBuf>, Error> {
     let mut protos = Vec::new();
     for path in src_paths {
         let dir = Path::new(path);
-        let files = get_protos_from_dir(dir)?;
+        let mut files = get_protos_from_dir(dir)?;
+        // `read_dir` order depends on the file system; sort so the generated
+        // code is the same on every machine.
+        files.sort();
         protos.extend(files);
     }
     Ok(protos)
