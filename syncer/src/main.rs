@@ -144,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 parties,
                 url,
                 template_filters,
+                true,
             )
             .await?;
             while let Some(response) = update_stream.next().await {
@@ -243,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 parties.clone(),
                 ledger_url.clone(),
                 template_filter_arg,
+                false,
             )
             .await?;
             let start_time = Instant::now();
@@ -300,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 parties.clone(),
                 ledger_url.clone(),
                 template_filter_arg,
+                false,
             )
             .await?;
             let start_time = Instant::now();
@@ -462,6 +465,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 batch_size: config.surrealdb.batch_size,
                 flush_timeout_secs: config.surrealdb.flush_timeout_secs,
                 idle_timeout_secs: config.surrealdb.idle_timeout_secs,
+                include_topology_events: config.ledger.include_topology_events,
             };
 
             if fresh {

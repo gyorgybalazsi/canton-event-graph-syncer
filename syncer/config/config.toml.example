@@ -45,6 +45,9 @@ url = "http://localhost:6865"
 # Positive value: absolute offset. Negative value: relative to ledger end (e.g., -5000000)
 # If not specified, falls back to ledger pruning offset
 # starting_offset = -5000000
+# Also sync topology transactions (party-to-participant hosting changes) for
+# the same parties (optional, default true)
+# include_topology_events = true
 
 # Local profile typically doesn't need Keycloak
 # [profiles.local.keycloak]

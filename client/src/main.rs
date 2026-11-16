@@ -125,7 +125,8 @@ async fn main() -> Result<()> {
                 end_inclusive,
                 vec![party],
                 url,
-                None, // No template filters
+                None,  // No template filters
+                false, // No topology events
             )
             .await?;
             while let Some(update) = stream.next().await {
@@ -150,7 +151,8 @@ async fn main() -> Result<()> {
                 end_inclusive,
                 vec![party],
                 url,
-                None, // No template filters
+                None,  // No template filters
+                false, // No topology events
             )
             .await?;
             while let Some(Ok(response)) = stream.next().await {

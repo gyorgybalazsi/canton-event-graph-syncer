@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 
 pub use crate::config::DbConfig;
 use crate::model::{
-    ACTION, CONSEQUENCE, CONSUMES, CREATED, EXERCISED, Edge, PARTY, REQUESTED, Row, TARGET,
-    TRANSACTION, WriteBatch,
+    ACTION, CONSEQUENCE, CONSUMES, CREATED, EXERCISED, Edge, Hosting, PARTICIPANT, PARTY,
+    REQUESTED, Row, TARGET, TOPOLOGY_EVENT, TRANSACTION, WriteBatch,
 };
 
 /// Opens a client connection and signs in as a database user.
@@ -43,6 +43,15 @@ fn is_not_allowed(e: &anyhow::Error) -> bool {
 
 /// Tables, relation tables and indexes. Run once at startup (and again after
 /// a reconnect, in case the server lost them); every statement is idempotent.
+///
+/// The `offset` indexes serve readers such as surrealdb-explorer, which load
+/// the newest transactions (`ORDER BY offset DESC LIMIT n`) and the events in
+/// an offset range. They were added after ledgers already existed, so they
+/// are built `CONCURRENTLY`: in batches, in the background, rather than in
+/// one transaction over the whole table. Writes to a table while its index
+/// is still being built fail with transaction conflicts, so
+/// [`Store::ensure_schema`] waits until they are ready (see
+/// [`BACKGROUND_INDEXES`]).
 pub const SCHEMA: &str = "
 DEFINE TABLE IF NOT EXISTS transaction TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS created TYPE NORMAL SCHEMALESS;
@@ -65,7 +74,27 @@ DEFINE INDEX IF NOT EXISTS created_from_acs ON created FIELDS from_acs;
 DEFINE INDEX IF NOT EXISTS exercised_choice_name ON exercised FIELDS choice_name;
 DEFINE INDEX IF NOT EXISTS exercised_target_contract ON exercised FIELDS target_contract_id;
 DEFINE INDEX IF NOT EXISTS transaction_update_id ON transaction FIELDS update_id;
+DEFINE INDEX IF NOT EXISTS transaction_offset ON transaction FIELDS offset CONCURRENTLY;
+DEFINE INDEX IF NOT EXISTS exercised_offset ON exercised FIELDS offset CONCURRENTLY;
+DEFINE TABLE IF NOT EXISTS participant TYPE NORMAL SCHEMALESS;
+DEFINE TABLE IF NOT EXISTS topology_event TYPE NORMAL SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS party ON topology_event TYPE record<party> REFERENCE;
+DEFINE FIELD IF NOT EXISTS participant ON topology_event TYPE record<participant> REFERENCE;
+DEFINE INDEX IF NOT EXISTS topology_event_party ON topology_event FIELDS party;
+DEFINE INDEX IF NOT EXISTS topology_event_participant ON topology_event FIELDS participant;
+DEFINE INDEX IF NOT EXISTS topology_event_record_time ON topology_event FIELDS record_time;
+DEFINE TABLE IF NOT EXISTS hosted_on TYPE RELATION IN party OUT participant SCHEMALESS;
+DEFINE INDEX IF NOT EXISTS hosted_on_in_out ON hosted_on FIELDS in, out UNIQUE;
 ";
+
+/// The indexes in [`SCHEMA`] built in the background, as (index, table).
+pub const BACKGROUND_INDEXES: [(&str, &str); 2] = [
+    ("transaction_offset", "transaction"),
+    ("exercised_offset", "exercised"),
+];
+
+/// How often [`Store::ensure_schema`] checks whether a background index is ready.
+const INDEX_POLL: Duration = Duration::from_millis(250);
 
 /// Retry delays for connection and write errors; the last one repeats.
 const RETRY_DELAYS: [Duration; 6] = [
@@ -171,11 +200,74 @@ impl Store {
         &self.db
     }
 
+    /// Defines the schema, then waits until the indexes built in the
+    /// background are ready, so no write races their build. Once built (every
+    /// start after the first one on a ledger) that wait is a single check.
     pub async fn ensure_schema(&self) -> Result<()> {
         let mut response = self.db.query(SCHEMA).await?;
         check_errors(&mut response).context("failed to define schema")?;
+        for (index, table) in BACKGROUND_INDEXES {
+            self.wait_for_index(index, table).await?;
+        }
         debug!("SurrealDB schema ensured");
         Ok(())
+    }
+
+    /// Waits until `index` on `table` has been built.
+    async fn wait_for_index(&self, index: &str, table: &str) -> Result<()> {
+        let mut last_report = std::time::Instant::now();
+        let mut reported = false;
+        loop {
+            let (status, done) = self.index_status(index, table).await?;
+            match status.as_deref() {
+                // No build information: nothing is being built.
+                None | Some("ready") => {
+                    if reported {
+                        info!(index, table, "index ready");
+                    }
+                    return Ok(());
+                }
+                Some("error") => return Err(anyhow!("building index {index} on {table} failed")),
+                Some(other) => {
+                    if !reported || last_report.elapsed() >= Duration::from_secs(5) {
+                        info!(
+                            index,
+                            table,
+                            status = other,
+                            records = done,
+                            "waiting for the index to be built before writing"
+                        );
+                        reported = true;
+                        last_report = std::time::Instant::now();
+                    }
+                    tokio::time::sleep(INDEX_POLL).await;
+                }
+            }
+        }
+    }
+
+    /// The index build's status (`started`, `cleaning`, `indexing`, `ready`,
+    /// ...) and how many existing records it has indexed, from `INFO FOR INDEX`.
+    async fn index_status(&self, index: &str, table: &str) -> Result<(Option<String>, i64)> {
+        let mut response = self
+            .db
+            .query(format!("INFO FOR INDEX {index} ON {table};"))
+            .await?;
+        check_errors(&mut response).with_context(|| format!("failed to read index {index}"))?;
+        let info: Value = response.take(0)?;
+        let building = match &info {
+            Value::Object(o) => match o.get("building") {
+                Some(Value::Object(b)) => b.clone(),
+                _ => return Ok((None, 0)),
+            },
+            _ => return Ok((None, 0)),
+        };
+        let status = match building.get("status") {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let done = building.get("initial").and_then(as_i64).unwrap_or(0);
+        Ok((status, done))
     }
 
     /// Signs in again and re-selects the namespace/database after the server
@@ -340,6 +432,7 @@ impl Store {
             .query(
                 "BEGIN;
                  DELETE action; DELETE consequence; DELETE target; DELETE consumes; DELETE requested;
+                 DELETE hosted_on; DELETE topology_event; DELETE participant;
                  DELETE transaction; DELETE created; DELETE exercised; DELETE party; DELETE sync_state;
                  COMMIT;",
             )
@@ -387,6 +480,22 @@ fn rows_value(rows: &[Row]) -> Value {
     )
 }
 
+fn hosting_value(hosting: &[Hosting]) -> Value {
+    Value::Array(
+        hosting
+            .iter()
+            .map(|h| {
+                let mut o = Object::new();
+                o.insert("id", Value::RecordId(h.id.clone()));
+                o.insert("in", Value::RecordId(h.from.clone()));
+                o.insert("out", Value::RecordId(h.to.clone()));
+                o.insert("data", Value::Object(h.data.clone()));
+                Value::Object(o)
+            })
+            .collect::<Array>(),
+    )
+}
+
 fn edges_value(edges: &[Edge]) -> Value {
     Value::Array(
         edges
@@ -412,11 +521,13 @@ pub fn batch_query(
     let mut vars: Vec<(String, Value)> = Vec::new();
 
     // Records first, so the edges below can find both ends.
-    let rows: [(&str, &[Row]); 4] = [
+    let rows: [(&str, &[Row]); 6] = [
         (TRANSACTION, &batch.transactions),
         (PARTY, &batch.parties),
+        (PARTICIPANT, &batch.participants),
         (CREATED, &batch.created),
         (EXERCISED, &batch.exercised),
+        (TOPOLOGY_EVENT, &batch.topology_events),
     ];
     for (table, rows) in rows {
         if rows.is_empty() {
@@ -454,6 +565,19 @@ pub fn batch_query(
             "INSERT RELATION IGNORE INTO {table} {source} RETURN NONE;\n"
         ));
         vars.push((var, edges_value(edges)));
+    }
+
+    // Current hosting state, applied in order. A change older than the edge's
+    // `last_offset` (a replayed update) is skipped.
+    if !batch.hosting.is_empty() {
+        query.push_str(
+            "FOR $h IN $hosting {\n\
+             \x20 LET $cur = (SELECT VALUE last_offset FROM ONLY $h.id);\n\
+             \x20 IF $cur IS NONE { INSERT RELATION INTO hosted_on object::extend({ id: $h.id, in: $h.in, out: $h.out }, $h.data) RETURN NONE; }\n\
+             \x20 ELSE IF $cur <= $h.data.last_offset { UPDATE $h.id MERGE $h.data RETURN NONE; };\n\
+             };\n",
+        );
+        vars.push(("hosting".into(), hosting_value(&batch.hosting)));
     }
 
     if let Some(max) = batch.max_offset {

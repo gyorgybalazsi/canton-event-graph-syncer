@@ -10,15 +10,18 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use ledger_api::v2::{
-    CreatedEvent, Event, ExercisedEvent, GetUpdatesResponse, Identifier, OffsetCheckpoint, Record,
-    RecordField, Transaction, Value as DamlValue, event, get_updates_response::Update, value::Sum,
+    CreatedEvent, Event, ExercisedEvent, GetUpdatesResponse, Identifier, OffsetCheckpoint,
+    ParticipantAuthorizationAdded, ParticipantAuthorizationChanged,
+    ParticipantAuthorizationRevoked, ParticipantPermission, Record, RecordField, TopologyEvent,
+    TopologyTransaction, Transaction, Value as DamlValue, event, get_updates_response::Update,
+    topology_event, value::Sum,
 };
 use surrealdb::engine::any;
 use surrealdb::opt::auth::Root;
 use surrealdb::types::{Number, Value};
 use syncer::config::{self, DbConfig};
 use syncer::model::{self, WriteBatch};
-use syncer::store::Store;
+use syncer::store::{BACKGROUND_INDEXES, Store};
 use syncer::writer::{StreamSettings, apply_batch_stream};
 
 const NS: &str = "test";
@@ -303,6 +306,54 @@ fn update(tx: Transaction) -> GetUpdatesResponse {
     }
 }
 
+const ALICE: &str = "alice::1220";
+const P1: &str = "PAR::participant1::1220";
+
+fn topology(offset: i64, event: topology_event::Event) -> GetUpdatesResponse {
+    GetUpdatesResponse {
+        update: Some(Update::TopologyTransaction(TopologyTransaction {
+            update_id: format!("topo-{offset}"),
+            offset,
+            synchronizer_id: "sync::1220".into(),
+            record_time: ts(1_700_000_000 + offset),
+            events: vec![TopologyEvent { event: Some(event) }],
+            ..Default::default()
+        })),
+    }
+}
+
+fn hosting_added(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationAdded(ParticipantAuthorizationAdded {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+            participant_permission: ParticipantPermission::Submission as i32,
+        }),
+    )
+}
+
+fn hosting_changed(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationChanged(ParticipantAuthorizationChanged {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+            participant_permission: ParticipantPermission::Observation as i32,
+        }),
+    )
+}
+
+fn hosting_revoked(offset: i64) -> GetUpdatesResponse {
+    topology(
+        offset,
+        topology_event::Event::ParticipantAuthorizationRevoked(ParticipantAuthorizationRevoked {
+            party_id: ALICE.into(),
+            participant_id: P1.into(),
+        }),
+    )
+}
+
 async fn count(store: &Store, table: &str) -> i64 {
     let mut r = store
         .client()
@@ -516,6 +567,117 @@ async fn repeated_message_creates_no_duplicates() {
 }
 
 #[tokio::test]
+async fn topology_events_are_logged_and_hosting_tracks_the_latest_state() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+    let store = server.store().await;
+
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(20)))
+        .await
+        .unwrap();
+    // Added and changed in one batch: applied in order.
+    let mut batch = model::update_to_batch(&hosting_changed(21));
+    batch.extend(model::update_to_batch(&hosting_revoked(22)));
+    store.write_batch(&batch).await.unwrap();
+
+    assert_eq!(count(&store, "topology_event").await, 3);
+    assert_eq!(count(&store, "participant").await, 1);
+    assert_eq!(count(&store, "party").await, 1);
+    assert_eq!(count(&store, "hosted_on").await, 1);
+    assert_eq!(store.last_processed_offset().await.unwrap(), Some(22));
+
+    // Log records link to their party and participant, in both directions.
+    let kinds = query_value(
+        &store,
+        "SELECT VALUE kind FROM topology_event WHERE participant.name = 'participant1' ORDER BY offset;",
+    )
+    .await;
+    assert_eq!(
+        kinds,
+        Value::Array(vec!["added", "changed", "revoked"].into_iter().collect())
+    );
+    let via_party = query_value(
+        &store,
+        "SELECT VALUE count(<~topology_event) FROM ONLY type::record('party', 'alice::1220');",
+    )
+    .await;
+    assert_eq!(via_party, Value::Number(Number::Int(3)));
+    let record_time = query_value(
+        &store,
+        "SELECT VALUE type::is_datetime(record_time) FROM ONLY topology_event:[20, 0];",
+    )
+    .await;
+    assert_eq!(record_time, Value::Bool(true));
+
+    // The edge holds the latest state: revoked, last permission kept.
+    let edge = query_value(
+        &store,
+        "SELECT VALUE [active, permission, since_offset, revoked_offset, last_offset] \
+         FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    let expected: Value = Value::Array(
+        vec![
+            Value::Bool(false),
+            Value::String("observation".into()),
+            Value::Number(Number::Int(20)),
+            Value::Number(Number::Int(22)),
+            Value::Number(Number::Int(22)),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    assert_eq!(edge, expected);
+    let hosted = query_value(
+        &store,
+        "SELECT VALUE ->hosted_on->participant.name FROM ONLY type::record('party', 'alice::1220');",
+    )
+    .await;
+    assert_eq!(first_string(&hosted).as_deref(), Some("participant1"));
+
+    // Replaying an older update adds no records and doesn't roll the edge back.
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(20)))
+        .await
+        .unwrap();
+    assert_eq!(count(&store, "topology_event").await, 3);
+    let active = query_value(
+        &store,
+        "SELECT VALUE active FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    assert_eq!(active, Value::Bool(false));
+
+    // Hosting again after the revocation reactivates the edge.
+    store
+        .write_batch(&model::update_to_batch(&hosting_added(30)))
+        .await
+        .unwrap();
+    let edge = query_value(
+        &store,
+        "SELECT VALUE [active, since_offset, revoked_offset] \
+         FROM ONLY hosted_on:['alice::1220', 'PAR::participant1::1220'];",
+    )
+    .await;
+    let expected: Value = Value::Array(
+        vec![
+            Value::Bool(true),
+            Value::Number(Number::Int(30)),
+            Value::None,
+        ]
+        .into_iter()
+        .collect(),
+    );
+    assert_eq!(edge, expected);
+
+    store.clear_all().await.unwrap();
+    for table in ["topology_event", "participant", "hosted_on"] {
+        assert_eq!(count(&store, table).await, 0, "{table}");
+    }
+}
+
+#[tokio::test]
 async fn batch_write_through_the_stream_writer() {
     let bin = require_surreal!();
     let server = TestServer::start(&bin).await;
@@ -623,4 +785,73 @@ async fn reset_and_clear() {
         assert_eq!(count(&store, table).await, 0, "{table}");
     }
     assert_eq!(store.last_processed_offset().await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn offset_indexes_are_built_before_writing_to_an_existing_ledger() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+
+    // A ledger synced before these indexes existed.
+    let root = any::connect(server.url()).await.unwrap();
+    root.signin(Root {
+        username: "root".into(),
+        password: "root".into(),
+    })
+    .await
+    .unwrap();
+    root.use_ns(NS).use_db(DB).await.unwrap();
+    let mut r = root
+        .query(
+            "FOR $i IN 0..30000 { CREATE type::record('exercised', [$i, 0]) SET offset = $i, node_id = 0; };
+             FOR $i IN 0..30000 { CREATE type::record('transaction', $i) SET offset = $i; };",
+        )
+        .await
+        .unwrap();
+    assert!(r.take_errors().is_empty());
+
+    // Connecting builds the indexes in the background and waits for them, so
+    // the writes that follow don't race the build.
+    let store = server.store().await;
+    for (index, table) in BACKGROUND_INDEXES {
+        let info = query_value(&store, &format!("INFO FOR INDEX {index} ON {table};")).await;
+        let status = match &info {
+            Value::Object(o) => match o.get("building") {
+                Some(Value::Object(b)) => b.get("status").and_then(first_string),
+                _ => None,
+            },
+            _ => None,
+        };
+        assert_eq!(status.as_deref(), Some("ready"), "{index}: {info:?}");
+    }
+    write_fixture(&store).await;
+    store.clear_all().await.unwrap();
+    assert_eq!(count(&store, "exercised").await, 0);
+}
+
+#[tokio::test]
+async fn offsets_are_indexed_for_readers() {
+    let bin = require_surreal!();
+    let server = TestServer::start(&bin).await;
+    let store = server.store().await;
+    write_fixture(&store).await;
+
+    // Readers load the newest transactions and the events in an offset range;
+    // with these indexes they don't scan the whole table.
+    for (table, index) in [
+        ("transaction", "transaction_offset"),
+        ("exercised", "exercised_offset"),
+    ] {
+        let info = query_value(&store, &format!("INFO FOR TABLE {table};")).await;
+        let Value::Object(info) = info else {
+            panic!("unexpected info {info:?}")
+        };
+        let Some(Value::Object(indexes)) = info.get("indexes") else {
+            panic!("no indexes in {info:?}")
+        };
+        assert!(
+            indexes.contains_key(index),
+            "{table} has no {index}: {indexes:?}"
+        );
+    }
 }
