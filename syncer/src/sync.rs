@@ -153,12 +153,12 @@ async fn load_acs(
 
 /// Picks the stream resume offset for a `--fresh` retry.
 ///
-/// On the first fresh iteration, the explorer commits to a starting offset
+/// On the first fresh iteration, the syncer commits to a starting offset
 /// (used as the anchor for the ACS load). On any subsequent retry — token
 /// refresh, transport error, etc. — the stream should resume from wherever
-/// SurrealDB actually is, not the original anchor; otherwise the explorer
-/// re-streams offsets it already committed (idempotent `MERGE`s, but no
-/// progress and `max(t.offset)` appears stalled).
+/// SurrealDB actually is, not the original anchor; otherwise the syncer
+/// re-streams offsets it already committed (idempotent upserts, but no
+/// progress and the stored offset appears stalled).
 fn resume_offset_after_fresh(initial: i64, db_max: Option<i64>) -> i64 {
     match db_max {
         Some(n) if n > initial => n,
@@ -170,15 +170,17 @@ fn resume_offset_after_fresh(initial: i64, db_max: Option<i64>) -> i64 {
 ///
 /// The ledger never reports updates beyond its end, so this cannot fix itself
 /// by retrying. It happens when SurrealDB holds data from a different ledger,
-/// typically a restarted (in-memory) sandbox whose offsets started over.
+/// typically a restarted (in-memory) sandbox whose offsets started over, or
+/// when the profile's absolute `starting_offset` is beyond this ledger's end.
 fn check_begin_within_ledger(begin_offset: i64, ledger_end: i64) -> Result<()> {
     if begin_offset > ledger_end {
         anyhow::bail!(
-            "Cannot resume: the stored offset {begin_offset} is after the ledger end \
-             {ledger_end}. SurrealDB holds data from a different ledger, most likely \
-             because the ledger was reset (e.g. a restarted sandbox). Run a fresh start \
-             (`syncer sync --fresh`, or \"Fresh start\" in the window) to clear it and \
-             sync the current ledger."
+            "Cannot start: the start offset {begin_offset} is after the ledger end \
+             {ledger_end}. Either SurrealDB holds data from a different ledger, most \
+             likely because the ledger was reset (e.g. a restarted sandbox): run a fresh \
+             start (`syncer sync --fresh`, or \"Fresh start\" in the window) to clear it \
+             and sync the current ledger. Or the profile's `starting_offset` is beyond \
+             this ledger's end: lower it, or use a negative value (relative to the end)."
         );
     }
     Ok(())
@@ -345,8 +347,9 @@ pub async fn run_resilient_sync(
     from_days_ago: Option<u32>,
 ) -> Result<()> {
     // One shared connection for the whole run. Defines the schema on connect
-    // and waits (with backoff) while the server is unreachable.
-    let store = Store::connect_with_retry(&sync_config.db).await;
+    // and waits (with backoff) while the server is unreachable, but stops if
+    // it refuses the login.
+    let store = Store::connect_with_retry(&sync_config.db).await?;
 
     // If fresh start, clear the synced data first
     if fresh {
@@ -366,7 +369,7 @@ pub async fn run_resilient_sync(
     let token_manager_for_progress = Arc::clone(&token_manager);
     let _progress_handle = tokio::spawn(async move {
         // `remaining <= CAUGHT_UP_THRESHOLD` => we've drained the backlog and are
-        // tracking live mainnet. The transition is logged exactly once until
+        // following the live ledger. The transition is logged exactly once until
         // `remaining` grows past FELL_BEHIND_THRESHOLD (a big backlog appeared,
         // e.g. SurrealDB was restarted), at which point the flag resets and the next
         // catch-up is logged again.
@@ -585,7 +588,7 @@ pub async fn run_resilient_sync(
             // Initial offset was pinned on the first fresh iteration to anchor
             // the ACS load. For the update stream on retry, resume from SurrealDB's
             // committed max offset if it's further along — otherwise the
-            // explorer re-streams offsets already processed and progress stalls.
+            // syncer re-streams offsets already processed and progress stalls.
             let db_max = store.last_processed_offset().await.ok().flatten();
             let resume = resume_offset_after_fresh(initial_offset, db_max);
             if resume != initial_offset {
@@ -736,7 +739,7 @@ pub async fn run_resilient_sync(
                         Err(e) => {
                             if is_pruning_error(&e) {
                                 warn!(
-                                    "ACS resume rejected (participant pruned past snapshot offset): {}. Clearing marker + from_acs nodes and restarting fresh.",
+                                    "ACS resume rejected (participant pruned past snapshot offset): {}. Clearing marker + from_acs records and restarting fresh.",
                                     e
                                 );
                                 if let Err(re) = store.reset_acs_state().await {
@@ -765,7 +768,7 @@ pub async fn run_resilient_sync(
         }
 
         // G3: never start the update stream before the ACS snapshot offset,
-        // even when no Transaction nodes exist yet.
+        // even when no transaction records exist yet.
         let begin_offset = {
             let marker_offset = store
                 .read_acs_marker()

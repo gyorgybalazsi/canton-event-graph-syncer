@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
-use regex::Regex;
+use client::config::substitute_env;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
 
 /// Top-level config file structure with profile support
 #[derive(Debug, Deserialize)]
@@ -18,42 +17,6 @@ pub struct ConfigFile {
     pub active_profile: String,
     /// Named profiles containing ledger and keycloak settings
     pub profiles: HashMap<String, ProfileConfig>,
-}
-
-fn placeholder_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    // Matches `${VAR}` where VAR uses [A-Za-z0-9_]. Letters of either case
-    // are accepted so contributors can pick natural names; convention in
-    // this repo is uppercase (SURREAL_PASSWORD, MAINNET_CLIENT_SECRET, etc.).
-    RE.get_or_init(|| Regex::new(r"\$\{([A-Za-z0-9_]+)\}").unwrap())
-}
-
-/// Replace `${VAR}` substrings with `std::env::var(VAR)`.
-///
-/// `field` is a human-readable path (e.g. `"keycloak.client_secret"`) used
-/// only to produce an actionable error message when a referenced env var is
-/// unset. Returns `s` unchanged when it contains no placeholders.
-fn substitute_env(s: &str, field: &str) -> anyhow::Result<String> {
-    let re = placeholder_re();
-    let mut out = String::with_capacity(s.len());
-    let mut last_end = 0;
-    for cap in re.captures_iter(s) {
-        let m = cap.get(0).unwrap();
-        let name = &cap[1];
-        let val = std::env::var(name).with_context(|| {
-            format!(
-                "config field '{}' references ${{{}}} but the env var is not set. \
-             Set it in the environment or `.env`, or run under \
-             `op run --env-file=secrets.env.1password -- ...` (see README, \"Secrets\")",
-                field, name
-            )
-        })?;
-        out.push_str(&s[last_end..m.start()]);
-        out.push_str(&val);
-        last_end = m.end();
-    }
-    out.push_str(&s[last_end..]);
-    Ok(out)
 }
 
 /// Resolve `${VAR}` placeholders inside the secret-bearing fields of the
@@ -309,26 +272,29 @@ pub fn resolve_config(config_file: ConfigFile, profile_override: Option<&str>) -
 }
 
 pub fn read_config_from_toml(profile: Option<&str>) -> Result<Config> {
-    // Try multiple locations for config.toml:
-    // 1. ./config/config.toml (relative to current working directory)
-    // 2. CARGO_MANIFEST_DIR/config/config.toml (for cargo run)
+    // Lookup order:
+    // 1. ./config/config.toml (run from the syncer folder)
+    // 2. ./syncer/config/config.toml (run from the repository root, e.g.
+    //    `target/release/syncer`)
+    // 3. CARGO_MANIFEST_DIR/config/config.toml (set by `cargo run`)
+    let candidates = [
+        Some(Path::new("config").join("config.toml")),
+        Some(Path::new("syncer").join("config").join("config.toml")),
+        std::env::var("CARGO_MANIFEST_DIR")
+            .ok()
+            .map(|root| Path::new(&root).join("config").join("config.toml")),
+    ];
 
-    let cwd_config = std::path::PathBuf::from("config").join("config.toml");
-    if cwd_config.exists() {
-        return read_config(&cwd_config, profile);
-    }
-
-    if let Ok(crate_root) = std::env::var("CARGO_MANIFEST_DIR") {
-        let cargo_config = std::path::PathBuf::from(&crate_root)
-            .join("config")
-            .join("config.toml");
-        if cargo_config.exists() {
-            return read_config(&cargo_config, profile);
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return read_config(&candidate, profile);
         }
     }
 
     anyhow::bail!(
-        "Could not find config.toml in ./config/config.toml or CARGO_MANIFEST_DIR/config/config.toml. Use --config-file to specify a path."
+        "Could not find config.toml. Searched: ./config/config.toml, \
+         ./syncer/config/config.toml, CARGO_MANIFEST_DIR/config/config.toml. \
+         Use --config-file to specify a path."
     )
 }
 

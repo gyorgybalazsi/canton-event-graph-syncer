@@ -43,7 +43,7 @@ enum Commands {
     },
     /// Benchmark raw Canton stream throughput (no database writes)
     Benchmark {
-        /// Path to config.toml file
+        /// Path to config.toml file (default: ./config/config.toml, then ./syncer/config/config.toml)
         #[arg(long)]
         config_file: Option<String>,
         /// Profile to use (overrides active_profile in config)
@@ -60,7 +60,7 @@ enum Commands {
         begin_offset: Option<i64>,
     },
     Sync {
-        /// Path to config.toml file (defaults to ./config/config.toml or CARGO_MANIFEST_DIR/config/config.toml)
+        /// Path to config.toml file (default: ./config/config.toml, then ./syncer/config/config.toml)
         #[arg(long)]
         config_file: Option<String>,
         /// Profile to use (overrides active_profile in config)

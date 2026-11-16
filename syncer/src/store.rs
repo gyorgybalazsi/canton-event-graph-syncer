@@ -33,6 +33,14 @@ pub async fn connect(c: &DbConfig) -> surrealdb::Result<Surreal<Any>> {
     Ok(db)
 }
 
+/// True when the error is SurrealDB refusing access (bad credentials or
+/// missing permissions), which no retry can fix.
+fn is_not_allowed(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<surrealdb::Error>())
+        .any(|e| e.is_not_allowed())
+}
+
 /// Tables, relation tables and indexes. Run once at startup (and again after
 /// a reconnect, in case the server lost them); every statement is idempotent.
 ///
@@ -143,13 +151,26 @@ impl Store {
     }
 
     /// Connects, retrying with a growing delay until the server is reachable.
-    pub async fn connect_with_retry(cfg: &DbConfig) -> Self {
+    ///
+    /// Stops with an error when the server refuses the login or the user's
+    /// permissions (wrong user name or password, missing namespace, database
+    /// or user, too weak a role): waiting cannot fix those.
+    pub async fn connect_with_retry(cfg: &DbConfig) -> Result<Self> {
         let mut attempt = 0;
         loop {
             match Store::connect(cfg).await {
                 Ok(store) => {
                     info!(url = %cfg.url, ns = %cfg.namespace, db = %cfg.database, "Connected to SurrealDB");
-                    return store;
+                    return Ok(store);
+                }
+                Err(e) if is_not_allowed(&e) => {
+                    return Err(e.context(format!(
+                        "SurrealDB refused user '{}' on namespace '{}', database '{}'. \
+                         Check SURREAL_PASSWORD and the user name, and that an administrator \
+                         created the namespace, database and user (see syncer/README.md, \
+                         \"SurrealDB\")",
+                        cfg.username, cfg.namespace, cfg.database
+                    )));
                 }
                 Err(e) => {
                     let delay = retry_delay(attempt);
@@ -520,9 +541,9 @@ pub fn batch_query(
     }
 
     // Edges. A repeated update hits the same edge id and is ignored.
-    // `target`/`consumes` point at contracts that may be outside the indexed
+    // `target`/`consumes` point at contracts that may be outside the synced
     // data (e.g. filtered out), so those edges are only written when the
-    // contract exists, as the Neo4j MATCH did.
+    // contract exists.
     let edges: [(&str, &[Edge], bool); 5] = [
         (ACTION, &batch.action, false),
         (CONSEQUENCE, &batch.consequence, false),

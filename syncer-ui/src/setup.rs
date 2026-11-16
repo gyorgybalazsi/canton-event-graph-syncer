@@ -2,7 +2,7 @@
 //! unknown profile, unset secret) show up in the window before anything starts.
 //! Secret values are never shown or kept: only whether they resolved.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -33,6 +33,10 @@ pub fn example_config_path(root: &Path) -> PathBuf {
 /// `just` does with `dotenv-load`. Variables that were already set when the
 /// window opened always win; the others follow the file, so editing `.env`
 /// and pressing Reload picks up the change.
+///
+/// `just sync-ui` has already exported the `.env` values when the window
+/// opens, so a variable whose value then equals the file's counts as coming
+/// from the file, not as preset; otherwise Reload would ignore edits to it.
 pub struct DotEnv {
     path: PathBuf,
     preset: HashSet<OsString>,
@@ -40,10 +44,18 @@ pub struct DotEnv {
 
 impl DotEnv {
     pub fn new(root: &Path) -> Self {
-        DotEnv {
-            path: root.join(".env"),
-            preset: std::env::vars_os().map(|(k, _)| k).collect(),
-        }
+        let path = root.join(".env");
+        let from_file: HashMap<String, String> = dotenvy::from_path_iter(&path)
+            .map(|items| items.filter_map(Result::ok).collect())
+            .unwrap_or_default();
+        let preset = std::env::vars_os()
+            .filter(|(k, v)| {
+                let file_value = k.to_str().and_then(|k| from_file.get(k));
+                file_value.is_none_or(|fv| OsStr::new(fv) != v)
+            })
+            .map(|(k, _)| k)
+            .collect();
+        DotEnv { path, preset }
     }
 
     /// Applies the file and returns a line for the UI. Values are never shown.

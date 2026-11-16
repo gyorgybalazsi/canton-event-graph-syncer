@@ -100,7 +100,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .field_attribute("google.rpc.Status.details", skip)
         .build_server(false)
         .build_client(true)
-        .out_dir("src/pb")
         .compile_protos(&all_protos, &[PROTO_ROOT_PATH])?;
     Ok(())
 }

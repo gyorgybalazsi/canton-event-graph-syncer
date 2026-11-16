@@ -5450,7 +5450,6 @@ dependencies = [
  "prost-types",
  "prost-wkt",
  "prost-wkt-types",
- "regex",
  "rust_decimal",
  "serde",
  "serde_json",

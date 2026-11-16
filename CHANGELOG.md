@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `syncer-ui`: an optional desktop window (iced) that starts and stops the
+  `syncer` program and shows its log (`just sync-ui`). It is not in
+  `default-members`, so a plain `cargo build` skips it.
 - `syncer` indexes `transaction.offset` and `exercised.offset`. Readers that load the
   newest transactions or an offset range, such as surrealdb-explorer, no longer
   scan the whole table. On an existing ledger the indexes are built in the
@@ -17,11 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `participant` table, plus a `hosted_on` edge holding each party's current
   hosting. `client::stream_updates` takes an `include_topology` flag; the
   syncer's `include_topology_events` profile setting defaults to true.
-
-### Removed
-- `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
-  history. Its checked-in output for the example DARs now lives in
-  `test/generated/`, and `client` no longer depends on it (it never used it).
 
 ### Changed
 - Repository renamed `rust-canton-toolbox` → `canton-event-graph-syncer`
@@ -46,17 +44,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   datetimes. See `syncer/README.md`.
 - Config: the `[neo4j]` section is replaced by `[surrealdb]`
   (`url`, `namespace`, `database`, `username`, `password`), each overridable
-  with a `SURREAL_*` environment variable. The indexer signs in as a database
+  with a `SURREAL_*` environment variable. The syncer signs in as a database
   user, never as root.
 - Database writes retry with a growing delay (1 s up to 30 s) while the server
   is down, keeping the batch in memory instead of failing.
 - `print-cypher` is now `print-surql`.
+- The syncer stops with an explanation, instead of retrying forever, when its
+  start offset is past the ledger end (for example after a sandbox restart).
+- `syncer` also finds `syncer/config/config.toml` when started from the
+  repository root (e.g. `target/release/syncer`).
+- The syncer stops with an error when SurrealDB refuses its login (wrong
+  password, missing user, namespace or database) instead of retrying forever.
+- `ledger-api` generates its bindings into Cargo's `OUT_DIR`; the generated
+  `ledger-api/src/pb/*.rs` files are no longer checked in.
+
+### Fixed
+- `sandbox-init` keeps reading the sandbox's output, so the sandbox no longer
+  dies of a broken pipe after start-up, and it exits when the sandbox does.
+  It also stops the sandbox on SIGTERM (e.g. `kill`), not only on Ctrl+C.
+- `client get-update-by-id` (`just get-update`) now fills in `${VAR}`
+  placeholders in the Keycloak settings, like the syncer; it used to send the
+  placeholder text as the secret.
+- In `syncer-ui`, *Reload* now picks up edits to `.env` when the window was
+  opened with `just sync-ui` (which had already loaded the old values).
 
 ### Removed
+- `codegen` moved to its own repository, https://github.com/gyorgybalazsi/daml-rust-codegen, with its
+  history. Its checked-in output for the example DARs now lives in
+  `test/generated/`, and `client` no longer depends on it (it never used it).
 - `event-graph-ui` (the Dioxus graph visualization).
 - The `[storage]` config section (`flatten_arguments`, `flatten_max_depth`,
   `store_arguments_json`): arguments are always stored nested.
 - The `neo4rs` dependency.
+- `jwt_generator.nu` (use `cargo run -p client -- fake-access-token`) and
+  `_daml/daml-ticketoffer-explicit-disclosure/start.sh` (use
+  `just sandbox-init-ticketoffer-explicit-disclosure`).
 
 ## [0.1.0] - 2026-07-01
 

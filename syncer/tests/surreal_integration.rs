@@ -409,6 +409,14 @@ async fn connects_and_refuses_wrong_password() {
         Store::connect(&wrong).await.is_err(),
         "a wrong password must be refused"
     );
+
+    // The retrying connect gives up at once instead of waiting forever.
+    let err = tokio::time::timeout(Duration::from_secs(10), Store::connect_with_retry(&wrong))
+        .await
+        .expect("connect_with_retry must not retry a refused login")
+        .err()
+        .expect("a wrong password must be refused");
+    assert!(format!("{err:#}").contains("refused user"), "{err:#}");
 }
 
 #[tokio::test]

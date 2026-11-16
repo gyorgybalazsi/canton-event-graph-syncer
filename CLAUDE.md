@@ -16,7 +16,7 @@ the point is to understand the Ledger API and `.dalf` encoding from scratch.
 
 | Crate | Role |
 |---|---|
-| `ledger-api` | Generated gRPC/protobuf bindings for the Canton Ledger API v2 (tonic/prost). `build.rs` compiles vendored protos under `ledger-api/resources/protobuf` into `src/pb/` **on every build**. |
+| `ledger-api` | Generated gRPC/protobuf bindings for the Canton Ledger API v2 (tonic/prost). `build.rs` compiles vendored protos under `ledger-api/resources/protobuf` into Cargo's `OUT_DIR` **on every build** (nothing generated is checked in). |
 | `daml-type-rep` | Daml type representations: built-in types, `LapiAccess`/`ToCreateArguments` traits, template IDs, numeric scale. |
 | `derive-lapi-access` | Proc-macros deriving `LapiAccess` / `ToCreateArguments`. |
 | `client` | Ledger API client helpers: active contracts, JWT, party/user management, DAR upload, run-script. |
@@ -25,12 +25,11 @@ the point is to understand the Ledger API and `.dalf` encoding from scratch.
 | `test` (`daml-model-rep-examples`) | Hand-written **integration** examples that exercise generated types against a live sandbox. The generated types are checked in under `test/generated/`; they come from the standalone code generator at https://github.com/gyorgybalazsi/daml-rust-codegen. |
 | `syncer` | CLI that syncs ACS/updates into a SurrealDB server (Keycloak auth, 1Password). |
 | `syncer-ui` | Optional iced desktop window that starts/stops the `syncer` program as a child process and shows its log. Not in `default-members`, so a plain `cargo build` skips it; `--workspace` (and CI) still builds it. |
-| `wallet` | Placeholder crate (stub). |
 
 ## Build quirks (read before touching the build)
 
 - **`protoc` is required.** The `ledger-api` build script invokes it.
-- **`ledger-api/src/pb/*.rs` is generated** by `build.rs` on every compile —
+- **The Ledger API bindings are generated** by `ledger-api/build.rs` into `OUT_DIR` on every compile —
   never hand-edit it. Suppress lints on it via `#[allow(...)]` on the including
   modules in `ledger-api/src/lib.rs`, not in the generated files.
 - **Toolchain is pinned** in `rust-toolchain.toml` (Rust 1.96.0 + clippy + rustfmt).

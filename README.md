@@ -20,7 +20,9 @@ See also: [A Daml ledger tells a story](https://discuss.daml.com/t/blog-post-a-d
 - **Daml SDK** `3.7.1+` (`dpm install 3.7.1`), for a local sandbox and the Daml examples
 - **[just](https://github.com/casey/just)** command runner (optional, for convenience recipes)
 
-Add protoc to rust-analyzer in `.vscode/settings.json`:
+The committed `.vscode/settings.json` tells rust-analyzer where protoc is
+(`/opt/homebrew/bin/protoc`, Homebrew on Apple Silicon). If yours is elsewhere
+(`which protoc`), change the path there:
 
 ```json
 {

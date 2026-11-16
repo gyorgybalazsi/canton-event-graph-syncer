@@ -1,16 +1,16 @@
 //! Turns ledger updates into the rows and edges written to SurrealDB.
 //!
-//! Tables (one per former Neo4j label):
+//! Tables:
 //!
-//! | table         | record id                     | was                 |
-//! |---------------|-------------------------------|---------------------|
-//! | `transaction` | `transaction:<offset>`        | `(:Transaction)`    |
-//! | `created`     | `created:<contract_id>`       | `(:Created)`        |
-//! | `exercised`   | `exercised:[<offset>, <node_id>]` | `(:Exercised)`  |
-//! | `party`       | `party:<party_id>`            | `(:Party)`          |
-//! | `sync_state`  | `sync_state:singleton` / `sync_state:stream` | `(:SyncState)` |
+//! | table         | record id                                    |
+//! |---------------|----------------------------------------------|
+//! | `transaction` | `transaction:<offset>`                       |
+//! | `created`     | `created:<contract_id>`                      |
+//! | `exercised`   | `exercised:[<offset>, <node_id>]`            |
+//! | `party`       | `party:<party_id>`                           |
+//! | `sync_state`  | `sync_state:singleton` / `sync_state:stream` |
 //!
-//! Relation tables (one per former relationship type), each with a stable edge
+//! Relation tables, each with a stable edge
 //! id so that replaying an update never creates a second edge:
 //!
 //! | relation      | in → out                         | edge id                  |
