@@ -35,6 +35,15 @@ pub async fn connect(c: &DbConfig) -> surrealdb::Result<Surreal<Any>> {
 
 /// Tables, relation tables and indexes. Run once at startup (and again after
 /// a reconnect, in case the server lost them); every statement is idempotent.
+///
+/// The `offset` indexes serve readers such as surrealdb-explorer, which load
+/// the newest transactions (`ORDER BY offset DESC LIMIT n`) and the events in
+/// an offset range. They were added after ledgers already existed, so they
+/// are built `CONCURRENTLY`: in batches, in the background, rather than in
+/// one transaction over the whole table. Writes to a table while its index
+/// is still being built fail with transaction conflicts, so
+/// [`Store::ensure_schema`] waits until they are ready (see
+/// [`BACKGROUND_INDEXES`]).
 pub const SCHEMA: &str = "
 DEFINE TABLE IF NOT EXISTS transaction TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS created TYPE NORMAL SCHEMALESS;
@@ -57,6 +66,8 @@ DEFINE INDEX IF NOT EXISTS created_from_acs ON created FIELDS from_acs;
 DEFINE INDEX IF NOT EXISTS exercised_choice_name ON exercised FIELDS choice_name;
 DEFINE INDEX IF NOT EXISTS exercised_target_contract ON exercised FIELDS target_contract_id;
 DEFINE INDEX IF NOT EXISTS transaction_update_id ON transaction FIELDS update_id;
+DEFINE INDEX IF NOT EXISTS transaction_offset ON transaction FIELDS offset CONCURRENTLY;
+DEFINE INDEX IF NOT EXISTS exercised_offset ON exercised FIELDS offset CONCURRENTLY;
 DEFINE TABLE IF NOT EXISTS participant TYPE NORMAL SCHEMALESS;
 DEFINE TABLE IF NOT EXISTS topology_event TYPE NORMAL SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS party ON topology_event TYPE record<party> REFERENCE;
@@ -67,6 +78,15 @@ DEFINE INDEX IF NOT EXISTS topology_event_record_time ON topology_event FIELDS r
 DEFINE TABLE IF NOT EXISTS hosted_on TYPE RELATION IN party OUT participant SCHEMALESS;
 DEFINE INDEX IF NOT EXISTS hosted_on_in_out ON hosted_on FIELDS in, out UNIQUE;
 ";
+
+/// The indexes in [`SCHEMA`] built in the background, as (index, table).
+pub const BACKGROUND_INDEXES: [(&str, &str); 2] = [
+    ("transaction_offset", "transaction"),
+    ("exercised_offset", "exercised"),
+];
+
+/// How often [`Store::ensure_schema`] checks whether a background index is ready.
+const INDEX_POLL: Duration = Duration::from_millis(250);
 
 /// Retry delays for connection and write errors; the last one repeats.
 const RETRY_DELAYS: [Duration; 6] = [
@@ -159,11 +179,74 @@ impl Store {
         &self.db
     }
 
+    /// Defines the schema, then waits until the indexes built in the
+    /// background are ready, so no write races their build. Once built (every
+    /// start after the first one on a ledger) that wait is a single check.
     pub async fn ensure_schema(&self) -> Result<()> {
         let mut response = self.db.query(SCHEMA).await?;
         check_errors(&mut response).context("failed to define schema")?;
+        for (index, table) in BACKGROUND_INDEXES {
+            self.wait_for_index(index, table).await?;
+        }
         debug!("SurrealDB schema ensured");
         Ok(())
+    }
+
+    /// Waits until `index` on `table` has been built.
+    async fn wait_for_index(&self, index: &str, table: &str) -> Result<()> {
+        let mut last_report = std::time::Instant::now();
+        let mut reported = false;
+        loop {
+            let (status, done) = self.index_status(index, table).await?;
+            match status.as_deref() {
+                // No build information: nothing is being built.
+                None | Some("ready") => {
+                    if reported {
+                        info!(index, table, "index ready");
+                    }
+                    return Ok(());
+                }
+                Some("error") => return Err(anyhow!("building index {index} on {table} failed")),
+                Some(other) => {
+                    if !reported || last_report.elapsed() >= Duration::from_secs(5) {
+                        info!(
+                            index,
+                            table,
+                            status = other,
+                            records = done,
+                            "waiting for the index to be built before writing"
+                        );
+                        reported = true;
+                        last_report = std::time::Instant::now();
+                    }
+                    tokio::time::sleep(INDEX_POLL).await;
+                }
+            }
+        }
+    }
+
+    /// The index build's status (`started`, `cleaning`, `indexing`, `ready`,
+    /// ...) and how many existing records it has indexed, from `INFO FOR INDEX`.
+    async fn index_status(&self, index: &str, table: &str) -> Result<(Option<String>, i64)> {
+        let mut response = self
+            .db
+            .query(format!("INFO FOR INDEX {index} ON {table};"))
+            .await?;
+        check_errors(&mut response).with_context(|| format!("failed to read index {index}"))?;
+        let info: Value = response.take(0)?;
+        let building = match &info {
+            Value::Object(o) => match o.get("building") {
+                Some(Value::Object(b)) => b.clone(),
+                _ => return Ok((None, 0)),
+            },
+            _ => return Ok((None, 0)),
+        };
+        let status = match building.get("status") {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let done = building.get("initial").and_then(as_i64).unwrap_or(0);
+        Ok((status, done))
     }
 
     /// Signs in again and re-selects the namespace/database after the server

@@ -7,6 +7,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `syncer` indexes `transaction.offset` and `exercised.offset`. Readers that load the
+  newest transactions or an offset range, such as surrealdb-explorer, no longer
+  scan the whole table. On an existing ledger the indexes are built in the
+  background, in batches; the syncer waits until they are ready before it
+  writes, logging the progress.
 - `syncer` now syncs topology transactions (party-to-participant hosting
   changes): a `topology_event` log with record links to `party` and the new
   `participant` table, plus a `hosted_on` edge holding each party's current
