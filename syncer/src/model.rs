@@ -320,6 +320,10 @@ fn created_row(created: &CreatedEvent, offset: i64, node_id: i32, from_acs: bool
         }
     }
     data.insert("signatories", strings(&created.signatories));
+    // The subscribed parties that see this node: its stakeholders and the
+    // informees of its ancestors. A party's projection of a transaction is
+    // the set of nodes listing it here.
+    data.insert("witness_parties", strings(&created.witness_parties));
     data.insert("offset", offset);
     data.insert("node_id", i64::from(node_id));
     if let Some(dt) = created.created_at.as_ref().and_then(timestamp_to_datetime) {
@@ -347,6 +351,7 @@ fn exercised_row(exercised: &ExercisedEvent, transaction: &Transaction) -> Row {
     }
     data.insert("target_contract_id", exercised.contract_id.clone());
     data.insert("acting_parties", strings(&exercised.acting_parties));
+    data.insert("witness_parties", strings(&exercised.witness_parties));
     data.insert("consuming", exercised.consuming);
     data.insert(
         "result_contract_ids",
@@ -701,6 +706,7 @@ mod tests {
             contract_id: "cid-new".into(),
             template_id: Some(template()),
             signatories: vec!["alice::1220".into()],
+            witness_parties: vec!["alice::1220".into(), "bob::1220".into()],
             create_arguments: Some(Record {
                 record_id: None,
                 fields: vec![RecordField {
@@ -718,6 +724,7 @@ mod tests {
             contract_id: "cid-old".into(),
             choice: "Transfer".into(),
             acting_parties: vec!["alice::1220".into()],
+            witness_parties: vec!["alice::1220".into()],
             consuming: true,
             last_descendant_node_id: 1,
             ..Default::default()
@@ -801,6 +808,17 @@ mod tests {
             other => panic!("expected nested object, got {other:?}"),
         }
         assert_eq!(data.get("name"), Some(&Value::String("Asset@10".into())));
+    }
+
+    #[test]
+    fn events_record_their_witness_parties() {
+        let b = transaction_to_batch(&sample_tx());
+        let witnesses = |data: &Object| match data.get("witness_parties") {
+            Some(Value::Array(a)) => a.len(),
+            other => panic!("expected an array, got {other:?}"),
+        };
+        assert_eq!(witnesses(&b.created[0].data), 2);
+        assert_eq!(witnesses(&b.exercised[0].data), 1);
     }
 
     fn topology_tx() -> TopologyTransaction {
