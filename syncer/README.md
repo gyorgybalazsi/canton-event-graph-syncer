@@ -37,8 +37,8 @@ The Ledger API v2 bindings are built from the Canton 3.7.1 protos. The syncer wa
 | Table | Record id | Main fields |
 |-------|-----------|-------------|
 | `transaction` | `transaction:<offset>` | `name` (`TX@<offset>`), `offset`, `update_id`, `command_id`, `workflow_id`, `synchronizer_id`, `effective_at`, `record_time`, `trace_context { traceparent, tracestate }` |
-| `created` | `created:<contract_id>` | `name` (`<Entity>@<offset>`), `contract_id`, `template_name`, `template { package_id, package_name, package, module_name, entity_name }`, `signatories [..]`, `offset`, `node_id`, `created_at`, `create_arguments { .. }`, `from_acs` |
-| `exercised` | `exercised:[<offset>, <node_id>]` | `name` (`<Choice>@<offset>`), `choice_name`, `template { .. }`, `interface { .. }` (for interface choices), `target_contract_id`, `acting_parties [..]`, `consuming`, `result_contract_ids [..]`, `offset`, `node_id`, `last_descendant_node_id`, `transaction_effective_at`, `choice_argument { .. }` |
+| `created` | `created:<contract_id>` | `name` (`<Entity>@<offset>`), `contract_id`, `template_name`, `template { package_id, package_name, package, module_name, entity_name }`, `signatories [..]`, `witness_parties [..]`, `offset`, `node_id`, `created_at`, `create_arguments { .. }`, `from_acs` |
+| `exercised` | `exercised:[<offset>, <node_id>]` | `name` (`<Choice>@<offset>`), `choice_name`, `template { .. }`, `interface { .. }` (for interface choices), `target_contract_id`, `acting_parties [..]`, `witness_parties [..]`, `consuming`, `result_contract_ids [..]`, `offset`, `node_id`, `last_descendant_node_id`, `transaction_effective_at`, `choice_argument { .. }` |
 | `party` | `party:<party_id>` | `party_id`, `name` (the part before `::`) |
 | `participant` | `participant:<participant_id>` | `participant_id`, `name` (`participant1` for `PAR::participant1::1220...`) |
 | `topology_event` | `topology_event:[<offset>, <index>]` | `name` (`<kind>:<party>@<offset>`), `kind` (`added`, `changed`, `onboarding`, `revoked`), `party` and `participant` (record links), `permission` (`submission`, `confirmation`, `observation`), `offset`, `index`, `update_id`, `synchronizer_id`, `record_time` |
@@ -49,6 +49,22 @@ Record ids come from the ledger, so replaying an update updates the same
 records instead of adding new ones. Timestamps are SurrealQL datetimes.
 Contracts loaded from the ACS have `offset = -1`, `node_id = 0` and
 `from_acs = true`.
+
+### What each party sees
+
+The syncer subscribes for all its parties at once, so each transaction is
+stored once, as the merged tree. `witness_parties` on every `created` and
+`exercised` record says which of those parties see that node: its
+stakeholders (or, for an exercise, its signatories or stakeholders and its
+actors) plus the informees of its ancestors. A party's projection of a
+transaction is the set of nodes that list it, for example:
+
+```sql
+SELECT * FROM exercised WHERE offset = 25 AND 'Bank::1220…' IN witness_parties;
+```
+
+For contracts loaded from the ACS, `witness_parties` holds only the
+subscribed stakeholders.
 
 ### Package names and versions
 
