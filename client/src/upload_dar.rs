@@ -104,7 +104,7 @@ pub fn package_id_from_dar(dar_path: &Path) -> anyhow::Result<String> {
     // Find the index of the MANIFEST.MF file inside META-INF
     let mut manifest_index = None;
     for i in 0..archive.len() {
-        let name = archive.by_index(i)?.name().to_string();
+        let name = archive.by_index(i)?.name()?.to_string();
         if name.ends_with("META-INF/MANIFEST.MF") {
             manifest_index = Some(i);
             break;
