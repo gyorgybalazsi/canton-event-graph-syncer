@@ -47,7 +47,7 @@ syn = "2.0.106"
 prettyplease = "0.2.36"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nix = { version = "0.30.1", features = ["signal"] }
+nix = { version = "0.31.3", features = ["signal"] }
 regex = "1.10.4"
 toml = "0.7"
 reqwest = { version = "0.12", features = ["json"] }

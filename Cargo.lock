@@ -848,7 +848,7 @@ dependencies = [
  "futures",
  "futures-util",
  "ledger-api",
- "nix 0.30.1",
+ "nix",
  "prost",
  "prost-types",
  "regex",
@@ -1185,7 +1185,7 @@ dependencies = [
  "derive-lapi-access",
  "futures-util",
  "ledger-api",
- "nix 0.30.1",
+ "nix",
  "prost-types",
  "regex",
  "rust_decimal",
@@ -3186,18 +3186,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
-dependencies = [
- "bitflags 2.10.0",
- "cfg-if",
- "cfg_aliases",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
@@ -4790,7 +4778,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "nix 0.30.1",
+ "nix",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5612,7 +5600,7 @@ version = "0.1.0"
 dependencies = [
  "dotenvy",
  "iced",
- "nix 0.30.1",
+ "nix",
  "syncer",
  "tokio",
 ]
@@ -7579,7 +7567,7 @@ dependencies = [
  "indexmap",
  "lzma-rust2",
  "memchr",
- "nix 0.31.3",
+ "nix",
  "pbkdf2 0.13.0",
  "ppmd-rust",
  "sha1 0.11.0",
