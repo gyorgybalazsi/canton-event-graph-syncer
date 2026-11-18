@@ -21,7 +21,7 @@ default-members = [
 ]
 
 [workspace.dependencies]
-tonic = { version = "0.13.1", features = ["transport"] }
+tonic = { version = "0.14.9", features = ["transport"] }
 tonic-build = "0.13.1"
 prost = { version = "0.13.5", features = ["derive"] }
 prost-build = "0.13.5"
