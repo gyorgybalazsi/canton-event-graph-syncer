@@ -43,7 +43,7 @@ anyhow = "1.0.98"
 zip = "9.0.5"
 proc-macro2 = "1.0.101"
 quote = "1.0.40"
-syn = "2.0.106"
+syn = "3.0.10"
 prettyplease = "0.2.36"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
