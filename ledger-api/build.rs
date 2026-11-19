@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         r#"#[serde(serialize_with = "crate::serde_helpers::serialize_bytes_as_base64")]"#;
     let skip = r#"#[serde(skip)]"#;
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         // Value types (existing)
         .type_attribute("com.daml.ledger.api.v2.Record", serialize)
         .type_attribute("com.daml.ledger.api.v2.RecordField", serialize)
@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         .field_attribute("google.rpc.Status.details", skip)
         .build_server(false)
         .build_client(true)
-        .compile_protos(&all_protos, &[PROTO_ROOT_PATH])?;
+        .compile_protos(&all_protos, &[PathBuf::from(PROTO_ROOT_PATH)])?;
     Ok(())
 }
 
