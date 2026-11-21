@@ -1,0 +1,126 @@
+package canton:analytics@0.2.0;
+
+/// What an analytics plugin exports. The runner (the host) does all the I/O:
+/// it reads from SurrealDB, keeps the cursor and the plugin's state, and
+/// writes the plugin's rows to a Delta Lake table. The plugin only holds
+/// logic: it gets no folders, environment or network.
+///
+/// One step of the runner:
+///   1. Runs `source.high-water` to find how far the database has got.
+///   2. Runs `source.query` with `$from` (exclusive) and `$to` (inclusive)
+///      bound to a cursor range, e.g. Canton offsets.
+///   3. Turns each statement's rows into Arrow, with the columns the plugin
+///      declared in `source.inputs`, and calls `transform` with them.
+///   4. Writes the returned rows to the Delta table, and stores the new
+///      cursor in the same commit, so a crash never loses or repeats a batch.
+///
+/// The plugin keeps its state (e.g. contracts created but not yet archived)
+/// in its own memory between calls: the instance lives as long as the
+/// runner. The runner asks for it with `save-state` only now and then, and
+/// hands the newest saved state to `load-state` when it starts. It then
+/// rebuilds the rest by calling `transform` again over the ranges since that
+/// state, throwing away the rows it already wrote. So `transform` must be
+/// deterministic: the same state and results always give the same rows and
+/// the same new state. After a failed `transform` the runner discards the
+/// instance and rebuilds it the same way, so a half-done call is harmless.
+interface plugin {
+    record plugin-info {
+        name: string,
+        version: string,
+        description: string,
+    }
+
+    record query-source {
+        /// SurrealQL run each step, with `$from` and `$to` bound. May hold
+        /// several statements.
+        query: string,
+        /// One Arrow schema (an IPC stream with no rows) per statement of
+        /// `query`, in order: the fields the runner reads from each row
+        /// object, by name. A missing field is null. Use an empty schema for
+        /// a statement whose result isn't rows, such as `LET`.
+        inputs: list<list<u8>>,
+        /// SurrealQL whose last statement returns one integer: the highest
+        /// cursor value available.
+        high-water: string,
+    }
+
+    /// How rows are written to the table.
+    variant write-mode {
+        /// Rows are only ever added.
+        append,
+        /// Rows are upserted on these key columns: a row replaces the row
+        /// with the same key, if there is one. For outputs such as running
+        /// totals per party.
+        merge(list<string>),
+    }
+
+    enum panel-kind {
+        /// One row; each column is a card, labelled with the column's name.
+        stats,
+        /// Columns `(time, value)` or `(time, value, series)`. The text
+        /// `{bucket}` in the SQL is replaced with an interval (such as
+        /// `INTERVAL '1 hour'`) chosen from the range of `time-column`, for
+        /// `date_bin({bucket}, …)`.
+        timeseries,
+        /// Columns `(label, value)`, one bar per row, in row order.
+        bar,
+        /// Any columns, as a sortable table.
+        table,
+    }
+
+    enum value-format {
+        /// From the column's type.
+        auto,
+        number,
+        /// Seconds, shown as e.g. `3.2 h`.
+        duration-seconds,
+        timestamp,
+        /// A long id, shown shortened.
+        id,
+    }
+
+    record column-format {
+        column: string,
+        format: value-format,
+    }
+
+    /// A dashboard panel. The SQL is DataFusion SQL over the plugin's table,
+    /// which is registered under the plugin's name with `-` written as `_`.
+    record panel {
+        title: string,
+        kind: panel-kind,
+        sql: string,
+        /// For `timeseries`: the table column whose range picks `{bucket}`.
+        time-column: option<string>,
+        formats: list<column-format>,
+    }
+
+    info: func() -> plugin-info;
+
+    /// The output table's columns, as an Arrow IPC stream with no rows.
+    schema: func() -> list<u8>;
+
+    source: func() -> query-source;
+
+    mode: func() -> write-mode;
+
+    /// The panels the explorer's dashboard shows for this plugin's table.
+    /// An empty list gets a view made from the table's columns.
+    dashboard: func() -> list<panel>;
+
+    /// Restores a state from `save-state`. Called once, before the first
+    /// `transform`, and not at all when the plugin starts from nothing.
+    load-state: func(state: list<u8>) -> result<_, string>;
+
+    /// The plugin's state, as opaque bytes for `load-state`.
+    save-state: func() -> list<u8>;
+
+    /// `results` holds one Arrow IPC stream per statement of `source.query`,
+    /// with the schema from `source.inputs`. Returns the new rows, as an
+    /// Arrow IPC stream with the schema from `schema` (possibly no rows).
+    transform: func(results: list<list<u8>>) -> result<list<u8>, string>;
+}
+
+world analytics-plugin {
+    export plugin;
+}

@@ -8,7 +8,10 @@ members = [
     "daml-type-rep",
     "derive-lapi-access",
     "test", "submit", "sandbox-init",
+    "analytics/reader", "analytics/runner",
 ]
+# The analytics plugins build for wasm32-wasip2, each as its own workspace.
+exclude = ["analytics/plugins"]
 # A plain `cargo build` / `cargo run` at the root skips the optional desktop UI
 # (and its GUI dependencies). `--workspace` and `-p syncer-ui` still include it.
 default-members = [

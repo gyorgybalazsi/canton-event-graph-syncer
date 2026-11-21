@@ -24,6 +24,9 @@ the point is to understand the Ledger API and `.dalf` encoding from scratch.
 | `sandbox-init` | Starts a Daml sandbox, uploads DARs, runs an init script. |
 | `test` (`daml-model-rep-examples`) | Hand-written **integration** examples that exercise generated types against a live sandbox. The generated types are checked in under `test/generated/`; they come from the standalone code generator at https://github.com/gyorgybalazsi/daml-rust-codegen. |
 | `syncer` | CLI that syncs ACS/updates into a SurrealDB server (Keycloak auth, 1Password). |
+| `analytics/runner` (`canton-analytics`) | Daemon that runs WebAssembly analytics plugins over the syncer's SurrealDB and writes Delta Lake tables (local folder or S3/Azure/GCS). Separate process from `syncer`. Not a default member. See `analytics/README.md`. |
+| `analytics/reader` (`canton-analytics-reader`) | Reads those tables with DataFusion (SQL, catalog, dashboard panels, heartbeat); no wasmtime or SurrealDB, so the explorer depends on it. Not a default member. |
+| `analytics/plugins/*` | Example plugins, each its own workspace built for `wasm32-wasip2` (excluded from the root workspace; CI's `analytics` job checks them and runs the analytics tests). |
 | `syncer-ui` | Optional iced desktop window that starts/stops the `syncer` program as a child process and shows its log. Not in `default-members`, so a plain `cargo build` skips it; `--workspace` (and CI) still builds it. |
 
 ## Build quirks (read before touching the build)

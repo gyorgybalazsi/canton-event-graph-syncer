@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for the canton-analytics daemon on a Mac.
+
+    cp com.canton.analytics.plist ~/Library/LaunchAgents/
+    # edit the paths and the SurrealDB settings below, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.canton.analytics.plist
+    tail -f ~/Library/Logs/canton-analytics.log
+
+  Stop it with `launchctl bootout gui/$(id -u)/com.canton.analytics`; launchd
+  sends SIGTERM, and the daemon saves its work before it exits.
+  Put the password in the Keychain or a 1Password `op run` wrapper rather
+  than in this file if the Mac is shared.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.canton.analytics</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/canton-analytics</string>
+    <string>run</string>
+    <string>--plugins-dir</string>
+    <string>/Users/YOU/canton-analytics/plugins</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/YOU/canton-analytics</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SURREAL_URL</key>
+    <string>ws://127.0.0.1:8000</string>
+    <key>SURREAL_NAMESPACE</key>
+    <string>canton</string>
+    <key>SURREAL_DATABASE</key>
+    <string>event_graph</string>
+    <key>SURREAL_USER</key>
+    <string>analytics</string>
+    <key>SURREAL_PASSWORD</key>
+    <string>change-me</string>
+    <key>CANTON_ANALYTICS_TABLES</key>
+    <string>/Users/YOU/canton-analytics/tables</string>
+    <key>RUST_LOG</key>
+    <string>info</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/Library/Logs/canton-analytics.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/Library/Logs/canton-analytics.log</string>
+</dict>
+</plist>
