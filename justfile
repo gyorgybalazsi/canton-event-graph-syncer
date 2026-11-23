@@ -124,9 +124,21 @@ analytics-demo tables="demo-tables": analytics-plugins
     cargo run -p canton-analytics --example demo_table -- {{tables}} plugins/*.wasm
     @echo "Dashboard location: $(cd {{tables}} && pwd)"
 
-# Open the explorer with the dashboard, built from a surrealdb-explorer checkout
-analytics-dashboard explorer="../surrealdb-explorer":
-    cd {{explorer}} && cargo run --release --features dashboard
+# Open the explorer with the dashboard (clones its branch, or give your own checkout's path)
+analytics-dashboard explorer="" branch="claude/project-thread-n2zx85":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{explorer}}"
+    if [ -z "$dir" ]; then
+        dir=target/surrealdb-explorer
+        if [ -d "$dir/.git" ]; then
+            git -C "$dir" fetch --depth 1 origin "{{branch}}"
+            git -C "$dir" checkout -q -B "{{branch}}" FETCH_HEAD
+        else
+            git clone --depth 1 --branch "{{branch}}" https://github.com/gyorgybalazsi/surrealdb-explorer "$dir"
+        fi
+    fi
+    cd "$dir" && cargo run --release --features dashboard
 
 # Run the daemon over the syncer's SurrealDB (SURREAL_* settings from the environment or .env)
 analytics-run tables="tables": analytics-plugins
