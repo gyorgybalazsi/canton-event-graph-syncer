@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-23
+
+The first tagged release of canton-event-graph-syncer. It covers everything
+since the repository was published (2026-11-10).
+
 ### Added
+- `syncer` stores each event's witness parties (`witness_parties` on `created`
+  and `exercised` records), so a party's projection of a transaction is the set
+  of nodes that list it. The syncer subscribes for all its parties at once, and
+  used to lose which party sees which node.
 - `syncer` records the package name and version of every contract and
   exercise: `template.package_name`, and a `template.package` link to a new
   `package` table (`package_name`, `package_version`), looked up from the
@@ -61,6 +71,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   password, missing user, namespace or database) instead of retrying forever.
 - `ledger-api` generates its bindings into Cargo's `OUT_DIR`; the generated
   `ledger-api/src/pb/*.rs` files are no longer checked in.
+- Moved to tonic 0.14: `ledger-api` now depends on `tonic-prost` and
+  `tonic-prost-build`, and prost / prost-types / prost-wkt moved to the matching
+  0.14 / 0.7 releases.
+- `client` no longer depends on `daml-type-rep` and `derive-lapi-access`.
+- Dependency updates (Dependabot), including openssl 0.10.82, quinn-proto
+  0.11.19, zip 9, syn 3, base64 0.23 and nix 0.31.
+
+### Security
+- Added `SECURITY.md`: report vulnerabilities privately through GitHub.
+- The CI workflow's token is limited to `contents: read`.
+- Dependabot opens weekly grouped updates for Cargo and GitHub Actions (but
+  not for the pinned Rust toolchain action).
 
 ### Fixed
 - `sandbox-init` keeps reading the sandbox's output, so the sandbox no longer
@@ -84,7 +106,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_daml/daml-ticketoffer-explicit-disclosure/start.sh` (use
   `just sandbox-init-ticketoffer-explicit-disclosure`).
 
-## [0.1.0] - 2026-07-01
+## Before 0.1.0 (rust-canton-toolbox, 2026-07-01, never tagged)
+
+This section was labelled 0.1.0 before the repository was published; no tag
+was made for it, and the first tagged 0.1.0 is the release above.
 
 ### Added
 - Dual-licensed under MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`)
@@ -108,3 +133,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Removed
 - Removed the placeholder `wallet` crate (an empty `Hello, world!` stub with no
   dependents) from the workspace
+
+[Unreleased]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/releases/tag/v0.1.0
