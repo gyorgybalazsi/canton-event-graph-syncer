@@ -354,8 +354,7 @@ mod tests {
         use deltalake::kernel::{DataType as DeltaType, StructField};
         let dir = std::env::temp_dir().join(format!("reader-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let location =
-            crate::Location::parse(&dir.to_string_lossy(), Default::default()).unwrap();
+        let location = crate::Location::parse(&dir.to_string_lossy(), Default::default()).unwrap();
         location
             .table()
             .await
