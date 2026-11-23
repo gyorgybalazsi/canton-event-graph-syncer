@@ -82,6 +82,11 @@ async fn run_panel(session: &Session, panel: Panel) -> PanelData {
             })) => {
                 sql = sql.replace("{bucket}", &width_for(hi - lo).to_string());
             }
+            // An empty table: a number column still needs a number, or the
+            // query fails before it finds there are no rows.
+            Ok(None) if is_number_column(session, panel.time_column.as_deref()) => {
+                sql = sql.replace("{bucket}", "1");
+            }
             Ok(range) => {
                 let seconds = range.map_or(3_600, |r| bucket_for(r.hi - r.lo));
                 bucket_seconds = Some(seconds);
@@ -170,6 +175,16 @@ async fn time_range(session: &Session, column: &str) -> Result<Option<Range>> {
         (Some((lo, time)), Some((hi, _))) => Some(Range { lo, hi, time }),
         _ => None,
     })
+}
+
+/// Whether the table's `column` holds numbers rather than timestamps.
+fn is_number_column(session: &Session, column: Option<&str>) -> bool {
+    let (Some(column), Ok(schema)) = (column, session.schema()) else {
+        return false;
+    };
+    schema
+        .field_with_name(column)
+        .is_ok_and(|f| f.data_type().is_numeric())
 }
 
 /// The smallest round width (1, 2 or 5 times a power of ten) that splits
@@ -330,6 +345,40 @@ mod tests {
         assert_eq!(bucket_for(2 * 86_400), 3_600);
         assert_eq!(bucket_for(30 * 86_400), 86_400);
         assert_eq!(bucket_for(100 * 365 * 86_400), 365 * 86_400);
+    }
+
+    /// A time series over an offset column of a table with no rows yet:
+    /// "no rows", not a query that mixes an offset and an interval.
+    #[tokio::test]
+    async fn an_offset_axis_works_on_an_empty_table() {
+        use deltalake::kernel::{DataType as DeltaType, StructField};
+        let dir = std::env::temp_dir().join(format!("reader-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let location =
+            crate::Location::parse(&dir.to_string_lossy(), Default::default()).unwrap();
+        location
+            .table()
+            .await
+            .unwrap()
+            .create()
+            .with_columns([StructField::new("offset", DeltaType::LONG, true)])
+            .await
+            .unwrap();
+        let session = Session::open(&location).await.unwrap();
+        let panel = Panel {
+            title: "per offset".into(),
+            kind: PanelKind::Timeseries,
+            sql: format!(
+                "SELECT \"offset\" - \"offset\" % {{bucket}} AS x, count(*) AS n FROM {} GROUP BY 1",
+                quote(&session.name)
+            ),
+            time_column: Some("offset".into()),
+            formats: Vec::new(),
+        };
+        let data = run_panel(&session, panel).await;
+        assert_eq!(data.frame.map(|f| f.rows()), Ok(0));
+        assert_eq!(data.bucket_seconds, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
