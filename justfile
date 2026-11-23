@@ -107,3 +107,58 @@ sandbox-init-full:
         --dar _daml/full/main/.daml/dist/full-0.0.1.dar \
         --init-dar _daml/full/test/.daml/dist/full-test-0.0.1.dar \
         --init-script-name "Test:setup"
+
+# --- Analytics (canton-analytics daemon, see analytics/README.md) ---
+
+# Build the example analytics plugins (WebAssembly) and copy them to plugins/
+analytics-plugins:
+    rustup target add wasm32-wasip2
+    cd analytics/plugins/contract-lifetimes && cargo build --release --target wasm32-wasip2 --target-dir target
+    cd analytics/plugins/party-activity && cargo build --release --target wasm32-wasip2 --target-dir target
+    mkdir -p plugins
+    cp analytics/plugins/*/target/wasm32-wasip2/release/*.wasm plugins/
+
+# Write demo Delta tables from the built-in Canton sample (no ledger or server needed)
+analytics-demo tables="demo-tables": analytics-plugins
+    rm -rf {{tables}}
+    cargo run -p canton-analytics --example demo_table -- {{tables}} plugins/*.wasm
+    @echo "Dashboard location: $(cd {{tables}} && pwd)"
+
+# Open the explorer's dashboard on a tables folder, with no database server (clones the explorer, or give your own checkout's path)
+analytics-dashboard tables="demo-tables" explorer="" branch="claude/project-thread-n2zx85":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tables="$(cd "{{tables}}" && pwd)"
+    dir="{{explorer}}"
+    if [ -z "$dir" ]; then
+        dir=target/surrealdb-explorer
+        if [ -d "$dir/.git" ]; then
+            git -C "$dir" fetch --depth 1 origin "{{branch}}"
+            git -C "$dir" checkout -q -B "{{branch}}" FETCH_HEAD
+        else
+            git clone --depth 1 --branch "{{branch}}" https://github.com/gyorgybalazsi/surrealdb-explorer "$dir"
+        fi
+    fi
+    (cd "$dir" && cargo build --release --features dashboard)
+    explorer="$(cd "$dir" && pwd)/target/release/surrealdb-explorer"
+    # Its own folder and settings: no database server (the dashboard reads the
+    # tables directly), no MCP server, and the tables already filled in.
+    run=target/analytics-dashboard
+    mkdir -p "$run"
+    cat > "$run/config.toml" <<EOF
+    [database]
+    server = ""
+    username = ""
+
+    [mcp]
+    enabled = false
+
+    [analytics]
+    location = "$tables"
+    EOF
+    cd "$run" && exec "$explorer"
+
+# Run the daemon over the syncer's SurrealDB (SURREAL_* settings from the environment or .env)
+analytics-run tables="tables": analytics-plugins
+    {{secrets_runner}} \
+      cargo run --release -p canton-analytics -- run --plugins-dir plugins --tables {{tables}}

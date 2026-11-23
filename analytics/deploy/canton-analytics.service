@@ -1,0 +1,33 @@
+# systemd unit for the canton-analytics daemon.
+#
+#   sudo cp canton-analytics.service /etc/systemd/system/
+#   sudo mkdir -p /etc/canton-analytics /var/lib/canton-analytics/plugins
+#   sudo cp canton-analytics.env.example /etc/canton-analytics/env   # then edit it
+#   sudo systemctl daemon-reload && sudo systemctl enable --now canton-analytics
+#   journalctl -u canton-analytics -f
+#
+# On stop, systemd sends SIGTERM: the daemon commits what it has, saves the
+# plugins' state and exits. TimeoutStopSec leaves it time for that.
+
+[Unit]
+Description=Canton analytics: WebAssembly plugins from SurrealDB into Delta Lake tables
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/canton-analytics/env
+ExecStart=/usr/local/bin/canton-analytics run --plugins-dir /var/lib/canton-analytics/plugins
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+DynamicUser=yes
+StateDirectory=canton-analytics
+WorkingDirectory=/var/lib/canton-analytics
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

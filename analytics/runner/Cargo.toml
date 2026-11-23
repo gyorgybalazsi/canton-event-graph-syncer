@@ -1,0 +1,30 @@
+[package]
+name = "canton-analytics"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Runs WASM analytics plugins over the syncer's SurrealDB database and writes their output to Delta Lake tables"
+
+[features]
+default = ["cloud"]
+# Tables in S3, Azure or Google Cloud Storage, besides local folders.
+cloud = ["canton-analytics-reader/cloud"]
+
+[dependencies]
+anyhow = { workspace = true }
+canton-analytics-reader = { path = "../reader" }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+deltalake = { version = "1.1", features = ["datafusion"] }
+futures-util = { workspace = true }
+serde_json = { workspace = true }
+surrealdb = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+wasmtime = "49"
+wasmtime-wasi = "49"
+zstd = "0.13"
+
+[dev-dependencies]
+surrealdb = { workspace = true, features = ["kv-mem"] }
