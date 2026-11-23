@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The SurrealDB integration tests start their server with `surreal db start`,
+  as SurrealDB 4 requires, and detect the `surreal` program with `--help`.
+  With SurrealDB 4 the old `surreal version` check could make them skip
+  themselves silently. The README's server command uses `surreal db start`
+  too.
+
 ## [0.1.0] - 2026-11-23
 
 The first tagged release of canton-event-graph-syncer. It covers everything

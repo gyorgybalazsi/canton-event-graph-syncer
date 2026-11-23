@@ -1,7 +1,7 @@
 //! Integration tests against a real SurrealDB server.
 //!
 //! Each test starts its own throwaway in-memory server with the `surreal`
-//! program on a free port (`surreal start ... memory`), so no real data is
+//! program on a free port (`surreal db start ... memory`), so no real data is
 //! ever touched. If `surreal` is not installed, the tests print a message and
 //! pass without running. Set `SURREAL_BIN` to use a specific binary.
 
@@ -32,8 +32,11 @@ const PASS: &str = "streamer-test";
 
 fn surreal_bin() -> Option<String> {
     let bin = std::env::var("SURREAL_BIN").unwrap_or_else(|_| "surreal".to_string());
+    // `--help` works on every SurrealDB version, so an installed `surreal`
+    // is never mistaken for a missing one (SurrealDB 4 moved `version` under
+    // `db`, and the old check made these tests skip themselves silently).
     let ok = Command::new(&bin)
-        .arg("version")
+        .arg("--help")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -57,7 +60,7 @@ macro_rules! require_surreal {
     };
 }
 
-/// A throwaway `surreal start ... memory` server, killed on drop.
+/// A throwaway `surreal db start ... memory` server, killed on drop.
 struct TestServer {
     bin: String,
     port: u16,
@@ -79,6 +82,7 @@ impl TestServer {
     async fn spawn(&mut self) {
         let child = Command::new(&self.bin)
             .args([
+                "db",
                 "start",
                 "--log",
                 "warn",
