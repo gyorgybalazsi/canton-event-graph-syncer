@@ -20,3 +20,5 @@ CLAUDE.local.md
 .codegraph/
 # Delta tables the analytics runner writes during local runs.
 /tables
+/plugins
+/demo-tables
