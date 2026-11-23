@@ -39,6 +39,8 @@ pub struct PanelData {
     pub bucket_seconds: Option<i64>,
     /// The result had more rows than are kept.
     pub truncated: bool,
+    /// How long the panel's queries took, in milliseconds.
+    pub millis: u64,
 }
 
 /// Runs every panel over the session's current version, all at once.
@@ -62,18 +64,31 @@ pub async fn load(session: &Session) -> Result<Dashboard> {
 }
 
 async fn run_panel(session: &Session, panel: Panel) -> PanelData {
+    let started = std::time::Instant::now();
+    let millis = || started.elapsed().as_millis() as u64;
     let mut bucket_seconds = None;
     let mut sql = panel.sql.clone();
     if panel.kind == PanelKind::Timeseries && sql.contains("{bucket}") {
-        let seconds = match &panel.time_column {
-            Some(column) => time_range(session, column)
-                .await
-                .map(|r| r.map(|(lo, hi)| bucket_for(hi - lo))),
+        let range = match &panel.time_column {
+            Some(column) => time_range(session, column).await,
             None => Ok(None),
         };
-        match seconds {
-            Ok(seconds) => {
-                let seconds = seconds.unwrap_or(3_600);
+        match range {
+            // A number column, such as an offset: buckets of a round width.
+            Ok(Some(Range {
+                lo,
+                hi,
+                time: false,
+            })) => {
+                sql = sql.replace("{bucket}", &width_for(hi - lo).to_string());
+            }
+            // An empty table: a number column still needs a number, or the
+            // query fails before it finds there are no rows.
+            Ok(None) if is_number_column(session, panel.time_column.as_deref()) => {
+                sql = sql.replace("{bucket}", "1");
+            }
+            Ok(range) => {
+                let seconds = range.map_or(3_600, |r| bucket_for(r.hi - r.lo));
                 bucket_seconds = Some(seconds);
                 sql = sql.replace("{bucket}", &format!("INTERVAL '{seconds} seconds'"));
             }
@@ -83,6 +98,7 @@ async fn run_panel(session: &Session, panel: Panel) -> PanelData {
                     frame: Err(format!("{e:#}")),
                     bucket_seconds,
                     truncated: false,
+                    millis: millis(),
                 };
             }
         }
@@ -111,33 +127,42 @@ async fn run_panel(session: &Session, panel: Panel) -> PanelData {
             frame: Ok(frame),
             bucket_seconds,
             truncated,
+            millis: millis(),
         },
         Err(e) => PanelData {
             panel,
             frame: Err(format!("{e:#}")),
             bucket_seconds,
             truncated: false,
+            millis: millis(),
         },
     }
 }
 
-/// The smallest and largest value of a timestamp column, in seconds.
-async fn time_range(session: &Session, column: &str) -> Result<Option<(i64, i64)>> {
+/// The smallest and largest value of a time series' x column.
+struct Range {
+    lo: i64,
+    hi: i64,
+    /// A timestamp column, in seconds; else a number column.
+    time: bool,
+}
+
+async fn time_range(session: &Session, column: &str) -> Result<Option<Range>> {
     let c = quote(column);
     let sql = format!(
         "SELECT min({c}) AS lo, max({c}) AS hi FROM {}",
         quote(&session.name)
     );
     let frame = Frame::from_batches(&session.sql(&sql).await?, |_| Format::Auto)?;
-    let get = |name: &str| -> Result<Option<i64>> {
+    let get = |name: &str| -> Result<Option<(i64, bool)>> {
         let column = frame.column(name).ok_or_else(|| anyhow!("no {name}"))?;
         Ok(match &column.values {
             Values::Time(v) => v
                 .first()
                 .copied()
                 .flatten()
-                .map(|us| us.div_euclid(1_000_000)),
-            Values::Number(v) => v.first().copied().flatten().map(|n| n as i64),
+                .map(|us| (us.div_euclid(1_000_000), true)),
+            Values::Number(v) => v.first().copied().flatten().map(|n| (n as i64, false)),
             Values::Text(_) => {
                 return Err(anyhow!(
                     "{column:?} is not a time column",
@@ -147,9 +172,34 @@ async fn time_range(session: &Session, column: &str) -> Result<Option<(i64, i64)
         })
     };
     Ok(match (get("lo")?, get("hi")?) {
-        (Some(lo), Some(hi)) => Some((lo, hi)),
+        (Some((lo, time)), Some((hi, _))) => Some(Range { lo, hi, time }),
         _ => None,
     })
+}
+
+/// Whether the table's `column` holds numbers rather than timestamps.
+fn is_number_column(session: &Session, column: Option<&str>) -> bool {
+    let (Some(column), Ok(schema)) = (column, session.schema()) else {
+        return false;
+    };
+    schema
+        .field_with_name(column)
+        .is_ok_and(|f| f.data_type().is_numeric())
+}
+
+/// The smallest round width (1, 2 or 5 times a power of ten) that splits
+/// `span` into fewer than 60 buckets, for a number x axis such as offsets.
+pub fn width_for(span: i64) -> i64 {
+    let mut power = 1_i64;
+    loop {
+        for step in [1, 2, 5] {
+            let width = step * power;
+            if span / width < 60 {
+                return width;
+            }
+        }
+        power = power.saturating_mul(10);
+    }
 }
 
 /// Bucket lengths to choose from, in seconds.
@@ -295,6 +345,48 @@ mod tests {
         assert_eq!(bucket_for(2 * 86_400), 3_600);
         assert_eq!(bucket_for(30 * 86_400), 86_400);
         assert_eq!(bucket_for(100 * 365 * 86_400), 365 * 86_400);
+    }
+
+    /// A time series over an offset column of a table with no rows yet:
+    /// "no rows", not a query that mixes an offset and an interval.
+    #[tokio::test]
+    async fn an_offset_axis_works_on_an_empty_table() {
+        use deltalake::kernel::{DataType as DeltaType, StructField};
+        let dir = std::env::temp_dir().join(format!("reader-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let location = crate::Location::parse(&dir.to_string_lossy(), Default::default()).unwrap();
+        location
+            .table()
+            .await
+            .unwrap()
+            .create()
+            .with_columns([StructField::new("offset", DeltaType::LONG, true)])
+            .await
+            .unwrap();
+        let session = Session::open(&location).await.unwrap();
+        let panel = Panel {
+            title: "per offset".into(),
+            kind: PanelKind::Timeseries,
+            sql: format!(
+                "SELECT \"offset\" - \"offset\" % {{bucket}} AS x, count(*) AS n FROM {} GROUP BY 1",
+                quote(&session.name)
+            ),
+            time_column: Some("offset".into()),
+            formats: Vec::new(),
+        };
+        let data = run_panel(&session, panel).await;
+        assert_eq!(data.frame.map(|f| f.rows()), Ok(0));
+        assert_eq!(data.bucket_seconds, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn widths_are_round_and_fewer_than_60() {
+        assert_eq!(width_for(0), 1);
+        assert_eq!(width_for(59), 1);
+        assert_eq!(width_for(100), 2);
+        assert_eq!(width_for(250), 5);
+        assert_eq!(width_for(10_000_000), 200_000);
     }
 
     #[test]

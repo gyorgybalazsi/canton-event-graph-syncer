@@ -262,11 +262,22 @@ async fn main() -> Result<()> {
             query,
         } => print_sql(&Session::open(&storage.location(&table)?).await?, &query).await?,
         Command::Dashboard { table, storage } => {
+            let started = std::time::Instant::now();
             let session = Session::open(&storage.location(&table)?).await?;
+            let opened = started.elapsed();
             let d = dashboard::load(&session).await?;
-            println!("{} (version {})", d.title, d.version.unwrap_or(-1));
+            println!(
+                "{} (version {}): opened in {} ms, all panels in {} ms",
+                d.title,
+                d.version.unwrap_or(-1),
+                opened.as_millis(),
+                (started.elapsed() - opened).as_millis()
+            );
             for p in d.panels {
-                println!("\n## {} ({:?})", p.panel.title, p.panel.kind);
+                println!(
+                    "\n## {} ({:?}, {} ms)",
+                    p.panel.title, p.panel.kind, p.millis
+                );
                 match p.frame {
                     Ok(frame) => {
                         for row in 0..frame.rows().min(20) {
