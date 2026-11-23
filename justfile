@@ -124,10 +124,11 @@ analytics-demo tables="demo-tables": analytics-plugins
     cargo run -p canton-analytics --example demo_table -- {{tables}} plugins/*.wasm
     @echo "Dashboard location: $(cd {{tables}} && pwd)"
 
-# Open the explorer with the dashboard (clones its branch, or give your own checkout's path)
-analytics-dashboard explorer="" branch="claude/project-thread-n2zx85":
+# Open the explorer's dashboard on a tables folder, with no database server (clones the explorer, or give your own checkout's path)
+analytics-dashboard tables="demo-tables" explorer="" branch="claude/project-thread-n2zx85":
     #!/usr/bin/env bash
     set -euo pipefail
+    tables="$(cd "{{tables}}" && pwd)"
     dir="{{explorer}}"
     if [ -z "$dir" ]; then
         dir=target/surrealdb-explorer
@@ -138,7 +139,24 @@ analytics-dashboard explorer="" branch="claude/project-thread-n2zx85":
             git clone --depth 1 --branch "{{branch}}" https://github.com/gyorgybalazsi/surrealdb-explorer "$dir"
         fi
     fi
-    cd "$dir" && cargo run --release --features dashboard
+    (cd "$dir" && cargo build --release --features dashboard)
+    explorer="$(cd "$dir" && pwd)/target/release/surrealdb-explorer"
+    # Its own folder and settings: no database server (the dashboard reads the
+    # tables directly), no MCP server, and the tables already filled in.
+    run=target/analytics-dashboard
+    mkdir -p "$run"
+    cat > "$run/config.toml" <<EOF
+    [database]
+    server = ""
+    username = ""
+
+    [mcp]
+    enabled = false
+
+    [analytics]
+    location = "$tables"
+    EOF
+    cd "$run" && exec "$explorer"
 
 # Run the daemon over the syncer's SurrealDB (SURREAL_* settings from the environment or .env)
 analytics-run tables="tables": analytics-plugins
