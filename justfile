@@ -125,7 +125,7 @@ analytics-demo tables="demo-tables": analytics-plugins
     @echo "Dashboard location: $(cd {{tables}} && pwd)"
 
 # Open the explorer's dashboard on a tables folder, with no database server (clones the explorer, or give your own checkout's path)
-analytics-dashboard tables="demo-tables" explorer="" branch="claude/project-thread-n2zx85":
+analytics-dashboard tables="demo-tables" explorer="" branch="main":
     #!/usr/bin/env bash
     set -euo pipefail
     tables="$(cd "{{tables}}" && pwd)"
