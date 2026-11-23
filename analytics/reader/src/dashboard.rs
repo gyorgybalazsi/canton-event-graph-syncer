@@ -165,11 +165,12 @@ const BUCKETS: [i64; 9] = [
     365 * 86_400,
 ];
 
-/// The shortest bucket that splits `span` seconds into at most 200 buckets.
+/// The shortest bucket that splits `span` seconds into fewer than 60 buckets:
+/// enough for a trend, few enough that each point means something.
 pub fn bucket_for(span: i64) -> i64 {
     BUCKETS
         .into_iter()
-        .find(|b| span / b < 200)
+        .find(|b| span / b < 60)
         .unwrap_or(BUCKETS[BUCKETS.len() - 1])
 }
 
@@ -289,9 +290,10 @@ mod tests {
     #[test]
     fn picks_a_bucket_for_the_span() {
         assert_eq!(bucket_for(0), 60);
-        assert_eq!(bucket_for(3 * 3_600), 60);
-        assert_eq!(bucket_for(2 * 86_400), 900);
-        assert_eq!(bucket_for(30 * 86_400), 6 * 3_600);
+        assert_eq!(bucket_for(30 * 60), 60);
+        assert_eq!(bucket_for(3 * 3_600), 300);
+        assert_eq!(bucket_for(2 * 86_400), 3_600);
+        assert_eq!(bucket_for(30 * 86_400), 86_400);
         assert_eq!(bucket_for(100 * 365 * 86_400), 365 * 86_400);
     }
 
