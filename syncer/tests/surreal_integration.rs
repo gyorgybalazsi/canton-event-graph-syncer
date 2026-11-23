@@ -34,7 +34,7 @@ fn surreal_bin() -> Option<String> {
     let bin = std::env::var("SURREAL_BIN").unwrap_or_else(|_| "surreal".to_string());
     // `--help` works on every SurrealDB version, so an installed `surreal`
     // is never mistaken for a missing one (SurrealDB 4 moved `version` under
-    // `db`, and the old check made these tests skip themselves silently).
+    // `db`, so the old `surreal version` check could skip these tests).
     let ok = Command::new(&bin)
         .arg("--help")
         .stdout(Stdio::null())
