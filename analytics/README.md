@@ -137,7 +137,10 @@ A plugin exports, from `wit/analytics.wit`:
 - `dashboard`: panels for the explorer, each a DataFusion SQL query and a
   kind: `stats`, `timeseries`, `bar` or `table`. A time series can use
   `{bucket}`, which the reader fills with an interval that suits the data's
-  time span, e.g. `date_bin({bucket}, archived_at)`. Columns can be formatted
+  time span, e.g. `date_bin({bucket}, archived_at)`. Its x axis can also be
+  a number column such as an offset: then `{bucket}` is a round width that
+  gives fewer than 60 points, e.g. `"offset" - "offset" % {bucket}`. The
+  reader times every panel. Columns can be formatted
   as numbers, durations, timestamps or ids. With no panels, the explorer makes
   some from the columns.
 - `load-state` / `save-state`: the plugin's memory as bytes. Save the same
@@ -146,7 +149,10 @@ A plugin exports, from `wit/analytics.wit`:
 - `transform`: one Arrow IPC stream per statement in, one out. Read all
   inputs before changing the state, so an error changes nothing.
 
-Copy one of the example plugins to start. A plugin can't reach the network
+Copy one of the example plugins to start. The
+[canton-event-graph-demo](https://github.com/gyorgybalazsi/canton-event-graph-demo)
+repo has plugins for its ticket model, and a benchmark of the dashboard over
+a 10-million-offset ledger. A plugin can't reach the network
 or the file system.
 
 ## Running it as a service

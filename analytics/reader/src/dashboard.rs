@@ -39,6 +39,8 @@ pub struct PanelData {
     pub bucket_seconds: Option<i64>,
     /// The result had more rows than are kept.
     pub truncated: bool,
+    /// How long the panel's queries took, in milliseconds.
+    pub millis: u64,
 }
 
 /// Runs every panel over the session's current version, all at once.
@@ -62,18 +64,26 @@ pub async fn load(session: &Session) -> Result<Dashboard> {
 }
 
 async fn run_panel(session: &Session, panel: Panel) -> PanelData {
+    let started = std::time::Instant::now();
+    let millis = || started.elapsed().as_millis() as u64;
     let mut bucket_seconds = None;
     let mut sql = panel.sql.clone();
     if panel.kind == PanelKind::Timeseries && sql.contains("{bucket}") {
-        let seconds = match &panel.time_column {
-            Some(column) => time_range(session, column)
-                .await
-                .map(|r| r.map(|(lo, hi)| bucket_for(hi - lo))),
+        let range = match &panel.time_column {
+            Some(column) => time_range(session, column).await,
             None => Ok(None),
         };
-        match seconds {
-            Ok(seconds) => {
-                let seconds = seconds.unwrap_or(3_600);
+        match range {
+            // A number column, such as an offset: buckets of a round width.
+            Ok(Some(Range {
+                lo,
+                hi,
+                time: false,
+            })) => {
+                sql = sql.replace("{bucket}", &width_for(hi - lo).to_string());
+            }
+            Ok(range) => {
+                let seconds = range.map_or(3_600, |r| bucket_for(r.hi - r.lo));
                 bucket_seconds = Some(seconds);
                 sql = sql.replace("{bucket}", &format!("INTERVAL '{seconds} seconds'"));
             }
@@ -83,6 +93,7 @@ async fn run_panel(session: &Session, panel: Panel) -> PanelData {
                     frame: Err(format!("{e:#}")),
                     bucket_seconds,
                     truncated: false,
+                    millis: millis(),
                 };
             }
         }
@@ -111,33 +122,42 @@ async fn run_panel(session: &Session, panel: Panel) -> PanelData {
             frame: Ok(frame),
             bucket_seconds,
             truncated,
+            millis: millis(),
         },
         Err(e) => PanelData {
             panel,
             frame: Err(format!("{e:#}")),
             bucket_seconds,
             truncated: false,
+            millis: millis(),
         },
     }
 }
 
-/// The smallest and largest value of a timestamp column, in seconds.
-async fn time_range(session: &Session, column: &str) -> Result<Option<(i64, i64)>> {
+/// The smallest and largest value of a time series' x column.
+struct Range {
+    lo: i64,
+    hi: i64,
+    /// A timestamp column, in seconds; else a number column.
+    time: bool,
+}
+
+async fn time_range(session: &Session, column: &str) -> Result<Option<Range>> {
     let c = quote(column);
     let sql = format!(
         "SELECT min({c}) AS lo, max({c}) AS hi FROM {}",
         quote(&session.name)
     );
     let frame = Frame::from_batches(&session.sql(&sql).await?, |_| Format::Auto)?;
-    let get = |name: &str| -> Result<Option<i64>> {
+    let get = |name: &str| -> Result<Option<(i64, bool)>> {
         let column = frame.column(name).ok_or_else(|| anyhow!("no {name}"))?;
         Ok(match &column.values {
             Values::Time(v) => v
                 .first()
                 .copied()
                 .flatten()
-                .map(|us| us.div_euclid(1_000_000)),
-            Values::Number(v) => v.first().copied().flatten().map(|n| n as i64),
+                .map(|us| (us.div_euclid(1_000_000), true)),
+            Values::Number(v) => v.first().copied().flatten().map(|n| (n as i64, false)),
             Values::Text(_) => {
                 return Err(anyhow!(
                     "{column:?} is not a time column",
@@ -147,9 +167,24 @@ async fn time_range(session: &Session, column: &str) -> Result<Option<(i64, i64)
         })
     };
     Ok(match (get("lo")?, get("hi")?) {
-        (Some(lo), Some(hi)) => Some((lo, hi)),
+        (Some((lo, time)), Some((hi, _))) => Some(Range { lo, hi, time }),
         _ => None,
     })
+}
+
+/// The smallest round width (1, 2 or 5 times a power of ten) that splits
+/// `span` into fewer than 60 buckets, for a number x axis such as offsets.
+pub fn width_for(span: i64) -> i64 {
+    let mut power = 1_i64;
+    loop {
+        for step in [1, 2, 5] {
+            let width = step * power;
+            if span / width < 60 {
+                return width;
+            }
+        }
+        power = power.saturating_mul(10);
+    }
 }
 
 /// Bucket lengths to choose from, in seconds.
@@ -295,6 +330,15 @@ mod tests {
         assert_eq!(bucket_for(2 * 86_400), 3_600);
         assert_eq!(bucket_for(30 * 86_400), 86_400);
         assert_eq!(bucket_for(100 * 365 * 86_400), 365 * 86_400);
+    }
+
+    #[test]
+    fn widths_are_round_and_fewer_than_60() {
+        assert_eq!(width_for(0), 1);
+        assert_eq!(width_for(59), 1);
+        assert_eq!(width_for(100), 2);
+        assert_eq!(width_for(250), 5);
+        assert_eq!(width_for(10_000_000), 200_000);
     }
 
     #[test]
