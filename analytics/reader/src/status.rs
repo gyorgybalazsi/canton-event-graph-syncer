@@ -33,6 +33,12 @@ pub struct Status {
     /// Which runner wrote it: host name and process id.
     #[serde(default)]
     pub host: String,
+    /// The commit thresholds in force (see [`crate::Tuning`]); 0 in a
+    /// heartbeat from an older runner.
+    #[serde(default)]
+    pub min_rows: u64,
+    #[serde(default)]
+    pub max_wait_ms: i64,
 }
 
 impl Status {

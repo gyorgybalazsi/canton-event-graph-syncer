@@ -115,8 +115,16 @@ For each plugin:
    checkpointed every 20 commits, so readers load a checkpoint and a few
    commits rather than the whole log.
 6. **Heartbeat.** `_canton_analytics/status.json` says when the daemon last
-   looked, how far it has committed, how far the database is, and the last
-   error. The explorer shows it.
+   looked, how far it has committed, how far the database is, the commit
+   thresholds in force, and the last error. The explorer shows it.
+7. **Lag settings.** `_canton_analytics/tuning.json`, which the explorer's
+   dashboard settings write, overrides `--every`, `--min-rows` and
+   `--max-wait` for that table, for example
+   `{"every_seconds": 2, "min_rows": 1000, "max_wait_seconds": 5}`. The
+   daemon reads it before each check, so a change takes effect without a
+   restart; a field left out (or no file) keeps the command-line value. On a
+   quiet ledger a new row shows up after at most about `every + max-wait`
+   seconds, plus the explorer's own check interval.
 
 Plugins share the database: when several plugins ask for the same query and
 range at once, it runs once. Each plugin has a fuel budget per call and a

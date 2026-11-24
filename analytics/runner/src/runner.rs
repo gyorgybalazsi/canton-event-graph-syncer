@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use analytics_reader::location::Location;
 use analytics_reader::status::{Status, now_ms};
+use analytics_reader::tuning::Tuning;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -68,6 +69,21 @@ impl Default for Options {
     }
 }
 
+/// `base` with a table's tuning on top. A check interval under a second is
+/// raised to one, so a typo can't make the runner spin.
+fn tuned(base: &Options, tuning: Tuning) -> Options {
+    Options {
+        every: tuning
+            .every_seconds
+            .map_or(base.every, |s| Duration::from_secs(s.max(1))),
+        min_rows: tuning.min_rows.map_or(base.min_rows, |n| n.max(1) as usize),
+        max_wait: tuning
+            .max_wait_seconds
+            .map_or(base.max_wait, Duration::from_secs),
+        ..base.clone()
+    }
+}
+
 /// Longest wait after failures before trying again.
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
 
@@ -75,6 +91,8 @@ pub struct Runner {
     pub plugin: Plugin,
     pub table: Table,
     pub options: Options,
+    /// The options as started, before a table's tuning file changed them.
+    base: Options,
     fetcher: Arc<Fetcher>,
     /// How far the steps have got, including rows not yet committed.
     pub cursor: i64,
@@ -128,6 +146,7 @@ impl Runner {
         let mut runner = Runner {
             plugin,
             table,
+            base: options.clone(),
             options,
             fetcher,
             cursor: saved.state_cursor,
@@ -321,6 +340,7 @@ impl Runner {
     pub async fn follow(&mut self, mut stop: watch::Receiver<bool>) -> Result<()> {
         let mut backoff = self.options.every;
         loop {
+            self.apply_tuning().await;
             let result = self.catch_up(false).await;
             let error = result.as_ref().err().map(|e| format!("{e:#}"));
             self.write_status(error, false).await;
@@ -357,6 +377,37 @@ impl Runner {
         saved
     }
 
+    /// Takes up the lag settings in the table's tuning file, which the
+    /// explorer writes; fields it leaves out, or no file, mean the options
+    /// the runner was started with. A file that can't be read is logged
+    /// and leaves the options as they are.
+    pub async fn apply_tuning(&mut self) {
+        let tuning = match self.table.read_tuning().await {
+            Ok(t) => t.unwrap_or_default(),
+            Err(e) => {
+                warn!(plugin = %self.plugin.info.name, error = %format!("{e:#}"), "could not read the tuning");
+                return;
+            }
+        };
+        let options = tuned(&self.base, tuning);
+        if (options.every, options.min_rows, options.max_wait)
+            != (
+                self.options.every,
+                self.options.min_rows,
+                self.options.max_wait,
+            )
+        {
+            info!(
+                plugin = %self.plugin.info.name,
+                every = ?options.every,
+                min_rows = options.min_rows,
+                max_wait = ?options.max_wait,
+                "lag settings changed"
+            );
+            self.options = options;
+        }
+    }
+
     /// Writes the heartbeat the explorer shows. A failure to write it is
     /// only logged: it mustn't stop the work. (`&mut`, because a shared
     /// borrow held across the write would need the plugin to be `Sync`.)
@@ -364,6 +415,8 @@ impl Runner {
         let status = Status {
             updated_at_ms: now_ms(),
             every_ms: self.options.every.as_millis() as i64,
+            min_rows: self.options.min_rows as u64,
+            max_wait_ms: self.options.max_wait.as_millis() as i64,
             stopped,
             plugin_version: self.plugin.info.version.clone(),
             committed: self.committed,

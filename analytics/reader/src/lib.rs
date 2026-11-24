@@ -14,6 +14,7 @@ pub mod frame;
 pub mod location;
 pub mod manifest;
 pub mod status;
+pub mod tuning;
 
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ use deltalake::logstore::object_store::ObjectStore;
 pub use location::Location;
 pub use manifest::Manifest;
 pub use status::Status;
+pub use tuning::Tuning;
 
 /// One table, registered in a DataFusion session under its SQL name (the
 /// plugin name with `-` as `_`, or the folder name). Keep it to refresh
