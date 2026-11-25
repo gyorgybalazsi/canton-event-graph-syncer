@@ -203,7 +203,13 @@ pub fn width_for(span: i64) -> i64 {
 }
 
 /// Bucket lengths to choose from, in seconds.
-const BUCKETS: [i64; 9] = [
+// From a second, so a short run (a demo's few purchases) still spreads over
+// several points instead of one.
+const BUCKETS: [i64; 13] = [
+    1,
+    5,
+    10,
+    30,
     60,
     300,
     900,
@@ -339,7 +345,9 @@ mod tests {
 
     #[test]
     fn picks_a_bucket_for_the_span() {
-        assert_eq!(bucket_for(0), 60);
+        assert_eq!(bucket_for(0), 1);
+        assert_eq!(bucket_for(7), 1);
+        assert_eq!(bucket_for(5 * 60), 10);
         assert_eq!(bucket_for(30 * 60), 60);
         assert_eq!(bucket_for(3 * 3_600), 300);
         assert_eq!(bucket_for(2 * 86_400), 3_600);
