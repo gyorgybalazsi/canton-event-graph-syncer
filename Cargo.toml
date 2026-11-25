@@ -49,7 +49,7 @@ zip = "9.0.5"
 proc-macro2 = "1.0.101"
 quote = "1.0.40"
 syn = "3.0.10"
-prettyplease = "0.2.36"
+prettyplease = "0.3.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.31.3", features = ["signal"] }
