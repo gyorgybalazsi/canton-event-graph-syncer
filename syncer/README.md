@@ -159,7 +159,7 @@ Install SurrealDB 4 ([instructions](https://surrealdb.com/install)) and run a
 server, for example with on-disk storage:
 
 ```bash
-surreal start --user root --pass '<root password>' --bind 127.0.0.1:8000 surrealkv://data/event-graph
+surreal db start --user root --pass '<root password>' --bind 127.0.0.1:8000 surrealkv://data/event-graph
 ```
 
 As root, create the namespace, the database and the syncer's user once (the
@@ -300,7 +300,7 @@ cargo test -p syncer
 ```
 
 The integration tests in `tests/surreal_integration.rs` start a throwaway
-in-memory server (`surreal start ... memory`) on a free port for each test, so
+in-memory server (`surreal db start ... memory`) on a free port for each test, so
 they never touch real data. They need the `surreal` program on the `PATH` (or
 `SURREAL_BIN` pointing at it) and are skipped with a message otherwise.
 
