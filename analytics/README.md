@@ -139,8 +139,12 @@ A plugin exports, from `wit/analytics.wit`:
   `{bucket}`, which the reader fills with an interval that suits the data's
   time span, e.g. `date_bin({bucket}, archived_at)`. Its x axis can also be
   a number column such as an offset: then `{bucket}` is a round width that
-  gives fewer than 60 points, e.g. `"offset" - "offset" % {bucket}`. The
-  reader times every panel. Columns can be formatted
+  gives fewer than 60 points, e.g. `"offset" - "offset" % {bucket}`. A panel
+  can instead use `{period}`, a calendar day or week that the viewer picks
+  with the dashboard's Day / Week switch, e.g.
+  `date_bin({period}, day_start, TIMESTAMP '2001-01-01T00:00:00Z')` (that
+  origin is a Monday, so weeks run Monday to Sunday). The reader times every
+  panel. Columns can be formatted
   as numbers, durations, timestamps or ids. With no panels, the explorer makes
   some from the columns.
 - `load-state` / `save-state`: the plugin's memory as bytes. Save the same

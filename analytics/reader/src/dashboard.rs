@@ -43,13 +43,42 @@ pub struct PanelData {
     pub millis: u64,
 }
 
-/// Runs every panel over the session's current version, all at once.
+/// The calendar period a panel's `{period}` stands for, which the dashboard
+/// lets the viewer switch: `INTERVAL '1 day'` or `INTERVAL '7 days'`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Period {
+    #[default]
+    Day,
+    Week,
+}
+
+impl Period {
+    pub fn seconds(self) -> i64 {
+        match self {
+            Period::Day => 86_400,
+            Period::Week => 7 * 86_400,
+        }
+    }
+}
+
+/// Whether a panel lets the viewer switch between days and weeks.
+pub fn uses_period(panel: &Panel) -> bool {
+    panel.sql.contains("{period}")
+}
+
+/// Runs every panel over the session's current version, all at once, with
+/// `{period}` as a day.
 pub async fn load(session: &Session) -> Result<Dashboard> {
+    load_with(session, Period::Day).await
+}
+
+/// Runs every panel, with `{period}` as the given period.
+pub async fn load_with(session: &Session, period: Period) -> Result<Dashboard> {
     let (panels, generated) = match session.manifest.as_ref().map(|m| &m.panels) {
         Some(panels) if !panels.is_empty() => (panels.clone(), false),
         _ => (generated_panels(session)?, true),
     };
-    let panels = join_all(panels.into_iter().map(|p| run_panel(session, p))).await;
+    let panels = join_all(panels.into_iter().map(|p| run_panel(session, p, period))).await;
     let (title, description) = match &session.manifest {
         Some(m) => (m.name.clone(), m.description.clone()),
         None => (session.name.clone(), String::new()),
@@ -63,11 +92,16 @@ pub async fn load(session: &Session) -> Result<Dashboard> {
     })
 }
 
-async fn run_panel(session: &Session, panel: Panel) -> PanelData {
+async fn run_panel(session: &Session, panel: Panel, period: Period) -> PanelData {
     let started = std::time::Instant::now();
     let millis = || started.elapsed().as_millis() as u64;
     let mut bucket_seconds = None;
     let mut sql = panel.sql.clone();
+    if uses_period(&panel) {
+        let seconds = period.seconds();
+        bucket_seconds = Some(seconds);
+        sql = sql.replace("{period}", &format!("INTERVAL '{seconds} seconds'"));
+    }
     if panel.kind == PanelKind::Timeseries && sql.contains("{bucket}") {
         let range = match &panel.time_column {
             Some(column) => time_range(session, column).await,
@@ -382,9 +416,65 @@ mod tests {
             time_column: Some("offset".into()),
             formats: Vec::new(),
         };
-        let data = run_panel(&session, panel).await;
+        let data = run_panel(&session, panel, Period::Day).await;
         assert_eq!(data.frame.map(|f| f.rows()), Ok(0));
         assert_eq!(data.bucket_seconds, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `{period}` is a day or a Monday-to-Sunday week, as the viewer picks.
+    #[tokio::test]
+    async fn period_switches_between_days_and_weeks() {
+        use deltalake::kernel::{DataType as DeltaType, StructField};
+        let dir = std::env::temp_dir().join(format!("reader-period-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let location = crate::Location::parse(&dir.to_string_lossy(), Default::default()).unwrap();
+        location
+            .table()
+            .await
+            .unwrap()
+            .create()
+            .with_columns([StructField::new("n", DeltaType::LONG, true)])
+            .await
+            .unwrap();
+        let session = Session::open(&location).await.unwrap();
+        // Monday 2 and Sunday 8 November are one week; Monday 9 starts the next.
+        let panel = Panel {
+            title: "per period".into(),
+            kind: PanelKind::Timeseries,
+            sql: "SELECT date_bin({period}, t, TIMESTAMP '2001-01-01T00:00:00Z') AS p, sum(n) AS n \
+                  FROM (VALUES (TIMESTAMP '2026-11-02T10:00:00Z', 1), (TIMESTAMP '2026-11-08T10:00:00Z', 2), \
+                  (TIMESTAMP '2026-11-09T10:00:00Z', 4)) AS v(t, n) GROUP BY 1 ORDER BY 1"
+                .into(),
+            time_column: None,
+            formats: Vec::new(),
+        };
+        assert!(uses_period(&panel));
+        let sums = |d: &PanelData| {
+            let f = d.frame.as_ref().unwrap();
+            (0..f.rows())
+                .map(|r| f.columns[1].values.number(r))
+                .collect::<Vec<_>>()
+        };
+        let weeks = run_panel(&session, panel.clone(), Period::Week).await;
+        assert_eq!(weeks.bucket_seconds, Some(7 * 86_400));
+        assert_eq!(sums(&weeks), [Some(3.0), Some(4.0)]);
+        let days = run_panel(&session, panel, Period::Day).await;
+        assert_eq!(days.bucket_seconds, Some(86_400));
+        // Eight days, the quiet ones as 0.
+        assert_eq!(
+            sums(&days),
+            [
+                Some(1.0),
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(0.0),
+                Some(2.0),
+                Some(4.0)
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
