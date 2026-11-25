@@ -12,7 +12,7 @@ use std::time::Duration;
 use analytics_reader::frame::Frame;
 use analytics_reader::location::Location;
 use analytics_reader::manifest::Mode;
-use analytics_reader::{Session, catalog, dashboard};
+use analytics_reader::{Session, Tuning, catalog, dashboard};
 use canton_analytics::fetch::Fetcher;
 use canton_analytics::plugin;
 use canton_analytics::runner::{Options, Runner, Summary};
@@ -206,6 +206,20 @@ fn lifetimes_are_appended_once_and_resume_from_a_saved_state() {
                 rows: 1
             }
         );
+        // The explorer's lag settings, taken up before the next check.
+        Tuning {
+            min_rows: Some(10),
+            max_wait_seconds: Some(2),
+            ..Tuning::default()
+        }
+        .write_at(&tables.join("contract-lifetimes"))
+        .await
+        .unwrap();
+        runner.apply_tuning().await;
+        assert_eq!(
+            (runner.options.min_rows, runner.options.max_wait),
+            (10, Duration::from_secs(2))
+        );
         runner.write_status(None, true).await;
 
         // Each contract once, with what the plugin knew when it was archived.
@@ -259,6 +273,7 @@ fn lifetimes_are_appended_once_and_resume_from_a_saved_state() {
         let status = session.status().await.unwrap().unwrap();
         assert!(status.stopped);
         assert_eq!((status.committed, status.high_water), (7, 7));
+        assert_eq!((status.min_rows, status.max_wait_ms), (10, 2_000));
 
         // The plugin's own panels, all of which run.
         let board = dashboard::load(&session).await.unwrap();

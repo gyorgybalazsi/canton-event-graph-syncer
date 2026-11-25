@@ -18,6 +18,7 @@ use std::time::Duration;
 use analytics_reader::location::{Location, read_file, write_file};
 use analytics_reader::manifest::{self, Manifest, Mode};
 use analytics_reader::status::Status;
+use analytics_reader::tuning::Tuning;
 use anyhow::{Context, Result, anyhow};
 use deltalake::arrow::array::RecordBatch;
 use deltalake::arrow::array::UInt32Array;
@@ -130,6 +131,11 @@ impl Table {
 
     pub async fn write_status(&self, status: &Status) -> Result<()> {
         status.write(self.store.as_ref()).await
+    }
+
+    /// The lag settings the explorer left next to the table, if any.
+    pub async fn read_tuning(&self) -> Result<Option<Tuning>> {
+        Tuning::read(self.store.as_ref()).await
     }
 
     /// The cursor of the last commit and the newest saved state.
