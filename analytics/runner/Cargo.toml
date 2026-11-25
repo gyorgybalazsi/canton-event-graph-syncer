@@ -24,7 +24,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 wasmtime = "49"
 wasmtime-wasi = "49"
-zstd = "0.13"
+zstd = "0.14"
 
 [dev-dependencies]
 surrealdb = { workspace = true, features = ["kv-mem"] }
