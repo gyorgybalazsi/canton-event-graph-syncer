@@ -54,5 +54,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.31.3", features = ["signal"] }
 regex = "1.10.4"
-toml = "0.7"
+toml = "1.2"
 reqwest = { version = "0.12", features = ["json"] }
