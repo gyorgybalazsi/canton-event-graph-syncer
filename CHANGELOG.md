@@ -7,10 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
+This release adds analytics: a separate daemon that runs WebAssembly plugins
+over the syncer's SurrealDB and writes Delta Lake tables, and a reader that
+surrealdb-explorer's Dashboard tab uses to chart them.
+
 ### Added
-- Analytics dashboards: `{period_name}` in a panel's query is `day` or
-  `week`, as the Day / Week switch says, so column names can name the period
-  a figure covers (`"last full {period_name}"`).
+- `canton-analytics` (`analytics/runner`): an always-on daemon, separate from
+  `syncer`, that runs WebAssembly analytics plugins (wasmtime component model,
+  WIT `canton:analytics@0.2.0`) over the syncer's SurrealDB and writes their
+  output to Delta Lake tables in a local folder or on S3, Azure or Google
+  Cloud Storage. Commits carry the cursor as a Delta application transaction
+  (exactly once); plugin state is checkpointed and replayed on restart; tables
+  are appended to or merged (upsert), compacted and vacuumed; a heartbeat file
+  reports progress. It also has `sql`, `dashboard`, `optimize` and `vacuum`
+  tools, and systemd and launchd service files. See `analytics/README.md`.
+- `canton-analytics-reader` (`analytics/reader`): reads those tables with
+  DataFusion (table catalog, dashboard panels declared by plugins or
+  generated, the heartbeat), with no wasmtime or SurrealDB, so the explorer
+  can depend on it. It times every panel's queries.
+- Dashboard panels can use `{period}`, which the viewer switches between a
+  day and a Monday-to-Sunday week, and `{period_name}` (`day` or `week`), so
+  column names can name the period a figure covers.
+- A time series whose time column is a number, such as an offset, gets a
+  round bucket width instead of an interval. Time buckets start at one
+  second, so a short run spreads over several points, and stay under 60.
+- Per-table lag settings (`_canton_analytics/tuning.json`, written by the
+  explorer) that the daemon takes up before each check without a restart.
+- Two example plugins, `contract-lifetimes` (append) and `party-activity`
+  (merge), each its own workspace built for `wasm32-wasip2`, and a CI job
+  that checks them and runs the analytics tests.
+- Just recipes `analytics-plugins`, `analytics-demo`, `analytics-dashboard`
+  and `analytics-run`.
 
 ### Fixed
 - The SurrealDB integration tests start their server with `surreal db start`,
@@ -146,5 +175,6 @@ was made for it, and the first tagged 0.1.0 is the release above.
 - Removed the placeholder `wallet` crate (an empty `Hello, world!` stub with no
   dependents) from the workspace
 
-[Unreleased]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gyorgybalazsi/canton-event-graph-syncer/releases/tag/v0.1.0

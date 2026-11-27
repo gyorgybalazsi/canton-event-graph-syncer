@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "canton-analytics"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "canton-analytics-reader",
@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "canton-analytics-reader"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "deltalake",
@@ -1864,7 +1864,7 @@ checksum = "e0921b3876b3a1df8a1c9f912e7f94342458022c2e84288015893d83c4d62a79"
 
 [[package]]
 name = "client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2580,7 +2580,7 @@ checksum = "6662915a20ca97f4c293df4b589dda442f852429f50fda4f1d779f12cb7fe98f"
 
 [[package]]
 name = "daml-model-rep-examples"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "daml-type-rep"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "ledger-api",
@@ -3579,7 +3579,7 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "derive-lapi-access"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "daml-type-rep",
  "ledger-api",
@@ -5685,7 +5685,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "ledger-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -8707,7 +8707,7 @@ dependencies = [
 
 [[package]]
 name = "sandbox-init"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -9389,7 +9389,7 @@ dependencies = [
 
 [[package]]
 name = "submit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "client",
@@ -10139,7 +10139,7 @@ dependencies = [
 
 [[package]]
 name = "syncer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -10165,7 +10165,7 @@ dependencies = [
 
 [[package]]
 name = "syncer-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dotenvy",
  "iced",
