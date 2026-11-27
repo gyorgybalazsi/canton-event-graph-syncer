@@ -151,8 +151,13 @@ A plugin exports, from `wit/analytics.wit`:
   can instead use `{period}`, a calendar day or week that the viewer picks
   with the dashboard's Day / Week switch, e.g.
   `date_bin({period}, day_start, TIMESTAMP '2001-01-01T00:00:00Z')` (that
-  origin is a Monday, so weeks run Monday to Sunday). The reader times every
-  panel. Columns can be formatted
+  origin is a Monday, so weeks run Monday to Sunday). `{period_name}` is
+  that period's name, `day` or `week`, for column names that say which
+  period a figure covers, e.g. `AS "last full {period_name}"`. A `bar`
+  panel over time that also returns `first_offset` and `last_offset` (the
+  ledger offsets each row covers) lets the explorer open a column's
+  transactions in its Graph tab; those two columns aren't drawn. The reader
+  times every panel. Columns can be formatted
   as numbers, durations, timestamps or ids. With no panels, the explorer makes
   some from the columns.
 - `load-state` / `save-state`: the plugin's memory as bytes. Save the same

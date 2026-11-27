@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Analytics dashboards: `{period_name}` in a panel's query is `day` or
+  `week`, as the Day / Week switch says, so column names can name the period
+  a figure covers (`"last full {period_name}"`).
+
 ### Fixed
 - The SurrealDB integration tests start their server with `surreal db start`,
   as SurrealDB 4 requires, and detect the `surreal` program with `--help`.

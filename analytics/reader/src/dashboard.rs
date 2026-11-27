@@ -59,11 +59,21 @@ impl Period {
             Period::Week => 7 * 86_400,
         }
     }
+
+    /// The period's name, `day` or `week`, which `{period_name}` stands
+    /// for: a panel can put it in its column names, so its figures say
+    /// which period they cover (`"last full {period_name}"`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Period::Day => "day",
+            Period::Week => "week",
+        }
+    }
 }
 
 /// Whether a panel lets the viewer switch between days and weeks.
 pub fn uses_period(panel: &Panel) -> bool {
-    panel.sql.contains("{period}")
+    panel.sql.contains("{period}") || panel.sql.contains("{period_name}")
 }
 
 /// Runs every panel over the session's current version, all at once, with
@@ -100,7 +110,9 @@ async fn run_panel(session: &Session, panel: Panel, period: Period) -> PanelData
     if uses_period(&panel) {
         let seconds = period.seconds();
         bucket_seconds = Some(seconds);
-        sql = sql.replace("{period}", &format!("INTERVAL '{seconds} seconds'"));
+        sql = sql
+            .replace("{period_name}", period.name())
+            .replace("{period}", &format!("INTERVAL '{seconds} seconds'"));
     }
     if panel.kind == PanelKind::Timeseries && sql.contains("{bucket}") {
         let range = match &panel.time_column {
@@ -474,6 +486,24 @@ mod tests {
                 Some(2.0),
                 Some(4.0)
             ]
+        );
+        // `{period_name}` names the period, so a figure can say which.
+        let named = Panel {
+            title: "named".into(),
+            kind: PanelKind::Stats,
+            sql: "SELECT 1 AS \"last full {period_name}\"".into(),
+            time_column: None,
+            formats: Vec::new(),
+        };
+        assert!(uses_period(&named));
+        let name = |d: PanelData| d.frame.unwrap().columns[0].name.clone();
+        assert_eq!(
+            name(run_panel(&session, named.clone(), Period::Week).await),
+            "last full week"
+        );
+        assert_eq!(
+            name(run_panel(&session, named, Period::Day).await),
+            "last full day"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
