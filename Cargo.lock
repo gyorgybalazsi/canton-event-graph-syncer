@@ -1673,7 +1673,7 @@ dependencies = [
  "tracing-subscriber",
  "wasmtime",
  "wasmtime-wasi",
- "zstd 0.13.5",
+ "zstd 0.14.4",
 ]
 
 [[package]]
