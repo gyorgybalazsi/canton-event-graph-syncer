@@ -25,7 +25,8 @@ default-members = [
 ]
 
 [workspace.dependencies]
-tonic = { version = "0.14.9", features = ["transport"] }
+# tls-ring + native roots: an https:// ledger URL connects over rustls with the OS trust store.
+tonic = { version = "0.14.9", features = ["transport", "tls-ring", "tls-native-roots"] }
 tonic-prost = "0.14.9"
 tonic-prost-build = "0.14.9"
 prost = { version = "0.14.6", features = ["derive"] }
@@ -55,4 +56,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 nix = { version = "0.31.3", features = ["signal"] }
 regex = "1.10.4"
 toml = "0.7"
-reqwest = { version = "0.12", features = ["json"] }
+# reqwest's defaults with rustls (OS trust store, as object_store uses) in place of native-tls/OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "charset", "http2", "system-proxy"] }
