@@ -69,7 +69,7 @@ impl PackageClient {
         if let Some(channel) = &self.channel {
             return Ok(channel.clone());
         }
-        let channel = Endpoint::from_shared(self.url.clone())?
+        let channel = Endpoint::new(self.url.clone())?
             .connect_timeout(CALL_TIMEOUT)
             .timeout(CALL_TIMEOUT)
             .connect()

@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::Command;
-use tonic::transport::Channel;
+use tonic::transport::Endpoint;
 use tracing::{error, info};
 use zip::ZipArchive;
 
@@ -14,8 +14,7 @@ use zip::ZipArchive;
 /// `ledger_api` is a PathBuf to the ledger API endpoint (e.g., "http://localhost:6865").
 pub async fn upload_dars(ledger_api: &Path, dar_paths: &[std::path::PathBuf]) -> Result<()> {
     let url = ledger_api.to_string_lossy().into_owned();
-    let channel = Channel::from_shared(url)
-        .unwrap()
+    let channel = Endpoint::new(url)?
         .connect()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to ledger API: {}", e))?;
@@ -45,8 +44,7 @@ pub async fn upload_dars(ledger_api: &Path, dar_paths: &[std::path::PathBuf]) ->
 
 pub async fn list_dars(ledger_api: &Path) -> Result<Vec<String>> {
     let url = ledger_api.to_string_lossy().into_owned();
-    let channel = Channel::from_shared(url)
-        .unwrap()
+    let channel = Endpoint::new(url)?
         .connect()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to ledger API: {}", e))?;

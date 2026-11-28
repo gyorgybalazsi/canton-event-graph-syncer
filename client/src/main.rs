@@ -100,9 +100,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::FakeAccessToken { url, party } => {
-            let channel = tonic::transport::Channel::from_shared(url)?
-                .connect()
-                .await?;
+            let channel = tonic::transport::Endpoint::new(url)?.connect().await?;
             let mut user_management_client = UserManagementServiceClient::new(channel);
             let token = fake_jwt(&mut user_management_client, &party).await?;
             info!("Fake access token: {}", token);
